@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+scipy
+scikit-learn
+google-generativeai
+spacy>=3.7,<3.8
+https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.7.0/es_core_news_sm-3.7.0-py3-none-any.whl
+nltk
+matplotlib
+joblib
+openpyxl
+ydata-profiling
