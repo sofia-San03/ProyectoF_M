@@ -47,8 +47,8 @@ def seleccionar_y_cargar_df():
     root = tk.Tk()
     root.withdraw()
     file_path = filedialog.askopenfilename(
-        title="Selecciona el archivo CSV para analizar",
-        filetypes=[("Archivos CSV", "*.csv"), ("Archivos Excel", "*.xlsx")]
+        title="Selecciona el archivo para analizar",
+        filetypes=[("Archivos CSV", "*.csv"), ("Archivos Excel", "*.xlsx"), ("Archivos JSON", "*.json")]
     )
     if not file_path:
         print("No se seleccionó ningún archivo.")
@@ -56,6 +56,8 @@ def seleccionar_y_cargar_df():
     
     if file_path.endswith('.csv'):
         return pd.read_csv(file_path)
+    elif file_path.endswith('.json'):
+        return pd.read_json(file_path)
     else:
         return pd.read_excel(file_path)
 
@@ -63,12 +65,17 @@ def obtener_dataframe_reciente():
     data_dir = os.path.join(os.getcwd(), 'data')
     if not os.path.exists(data_dir):
         return None
-    files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.csv')]
+    files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(('.csv', '.xlsx', '.json'))]
     if not files:
         return None
     latest_file = max(files, key=os.path.getctime)
     print(f"Cargando archivo más reciente: {latest_file}")
-    return pd.read_csv(latest_file)
+    if latest_file.endswith('.csv'):
+        return pd.read_csv(latest_file)
+    elif latest_file.endswith('.json'):
+        return pd.read_json(latest_file)
+    else:
+        return pd.read_excel(latest_file)
 
 def AnalizarDatos(df):
     from ydata_profiling import ProfileReport

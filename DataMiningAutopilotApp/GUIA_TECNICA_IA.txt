@@ -21,7 +21,8 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
       "WOE": false,
       "bins_woe": 5,
       "Ordinal": false,
-      "orden": []
+      "orden": [],
+      "Fecha": false
     }
   },
   "EsPCA": false
@@ -51,6 +52,7 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 - bins_woe: numero de bins para calcular WOE/IV en variables numericas.
 - Ordinal: aplica codificacion ordinal. Requiere orden.
 - orden: lista con el orden logico de categorias, por ejemplo ["bajo", "medio", "alto"].
+- Fecha: (BOOL) Si es true, el sistema tratara la columna como fecha, extrayendo features (año, mes, dia, dia_semana) y calculando t_paso (días desde el inicio).
 - n_clusters: (OPCIONAL, SOLO PARA CLUSTERING) Si el usuario o la IA definen un numero entero N, el modelo usara exactamente N clusters. Si es null o no se incluye, el sistema encontrara el numero optimo automaticamente (AUTO).
 
 4. REGLAS DE ORO Y RESTRICCIONES
@@ -66,9 +68,11 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 - Para Arbol_decision, Redes_neuronales y KNN, elegir segun tipo de target: numerico continuo para regresion; categorico/discreto para clasificacion.
 - Las columnas casi constantes se eliminaran automaticamente si no aportan informacion.
 - Los outliers se analizan automaticamente con IQR antes de imputar nulos.
-- Las columnas datetime se transformaran automaticamente en variables numericas: year, month, day y dayofweek.
+- Identificar columnas que representen tiempo o fechas (ej. "fecha_venta", "timestamp", "create_at") y asignarles "Fecha": true. Esto ordenará los datos cronológicamente y creará una columna "t_paso" fundamental para series de tiempo o análisis secuenciales.
 - Al final del preprocesamiento, todas las variables de entrada deben ser numericas.
--en reglas_dict usar todas las columnas del dataset para evitar errores al ejecutar el pipeline de preprocesamiento, recomendar un tratamiento para cada columna
+- en reglas_dict usar todas las columnas del dataset para evitar errores al ejecutar el pipeline de preprocesamiento, recomendar un tratamiento para cada columna.
+- **PROHIBICIÓN DE NOMBRES**: SIEMPRE propón "metodo": "drop-column" para columnas que contengan nombres de personas (directores, actores, clientes), IDs, RUT, DNI, correos, etc. NO USAR TargetEncoding ni Dummies en estas columnas a menos que el usuario lo pida explícitamente, ya que causan sobreajuste masivo.
+- **DETECCIÓN DE TAGS/LISTAS**: Si una columna categórica contiene múltiples etiquetas separadas por barras "|", comas "," o espacios, es OBLIGATORIO usar "Lematizar": true. NO USAR Dummies en estas columnas porque trataría la combinación como una única categoría.
 
 5. EJEMPLO DE CONFIGURACION VALIDA
 
@@ -79,7 +83,8 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
     "descripcion": { "Lematizar": true },
     "calidad": { "Ordinal": true, "orden": ["mala", "buena", "excelente"] },
     "alcaldia": { "TargetEncoding": true },
-    "metros": { "metodo": "median" }
+    "metros": { "metodo": "median" },
+    "fecha_construccion": { "Fecha": true }
   },
   "EsPCA": false
 }

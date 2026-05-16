@@ -50,6 +50,7 @@ class Transformar_Df:
         self.columnas_texto_separadas = {}
         self.woe_mappings = {} 
         self.ordinal_mappings = {} 
+        self.fecha_referencia = {}
 
     def _cargar_modelo_nlp(self, modelo_nlp):
         if spacy is None:
@@ -259,6 +260,42 @@ class Transformar_Df:
         self.df[columna] = self.df[columna].map(mapping).fillna(-1).astype(int)
         return "Ordinal Encoding"
 
+    def Manejo_Fechas(self, columna):
+        """Procesa columnas de fecha: ordena, extrae características y calcula t_paso."""
+        if columna not in self.df.columns:
+            return None
+        
+        self.df[columna] = pd.to_datetime(self.df[columna], errors='coerce')
+
+        if self.df[columna].isnull().any():
+            self.df.dropna(subset=[columna], inplace=True)
+
+        if self.df.empty:
+            return None
+
+        self.df.sort_values(by=columna, inplace=True)
+
+        # Guardar fecha de referencia (Día 0)
+        min_date = self.df[columna].min()
+        self.fecha_referencia[columna] = min_date
+
+        # Crear t_paso (días transcurridos)
+        self.df[f"{columna}_t_paso"] = (self.df[columna] - min_date).dt.days
+
+        # Extraer características
+        self.df[f"{columna}_anio"] = self.df[columna].dt.year
+        self.df[f"{columna}_mes"] = self.df[columna].dt.month
+        
+        # Solo extraer día si hay información real de días (si no todos son día 1)
+        if self.df[columna].dt.day.nunique() > 1:
+            self.df[f"{columna}_dia"] = self.df[columna].dt.day
+            self.df[f"{columna}_dia_semana"] = self.df[columna].dt.dayofweek
+            self.df[f"{columna}_es_fin_semana"] = self.df[columna].dt.dayofweek.isin([5, 6]).astype(int)
+        
+        # Eliminar la original
+        self.df.drop(columns=[columna], inplace=True)
+        return "Procesamiento de Fecha (t_paso + features)"
+
     def Clean_All_Rows(self, reglas_dict=None, EsPCA=False):
         print("Reglas de Entrada:")
         print(reglas_dict)
@@ -289,6 +326,16 @@ class Transformar_Df:
             col_norm = str(col).strip().lower()
             regla = reglas_normalizadas.get(col_norm, {})
             
+            es_fecha = ptypes.is_datetime64_any_dtype(self.df[col]) or \
+                       (ptypes.is_object_dtype(self.df[col]) and "fecha" in col_norm) or \
+                       regla.get('Fecha', False)
+
+            if es_fecha:
+                res_fecha = self.Manejo_Fechas(col)
+                if res_fecha:
+                    reporte.append({'columna': col, 'metodo': res_fecha, 'Valor_de_relleno': None})
+                    continue
+
             if ptypes.is_numeric_dtype(self.df[col]):
                 self.Manejo_Atipicos(col)
 
@@ -329,14 +376,19 @@ class Transformar_Df:
                     res_ord = self.aplicar_ordinal_encoding(col, orden=regla.get('orden'))
                     reporte[-1]['metodo'] += f' / {res_ord}'
                 elif regla.get('Dummies', False):
-                    self.df = pd.get_dummies(self.df, columns=[col], drop_first=True)
-                    reporte[-1]['metodo'] += ' / Dummies'
+                    freq_max = self.df[col].value_counts(normalize=True).max() if not self.df[col].empty else 0
+                    if freq_max < 0.05:
+                        self.df.drop(columns=[col], inplace=True)
+                        reporte[-1]['metodo'] += ' / Borrada (Frecuencia < 5%)'
+                    else:
+                        self.df = pd.get_dummies(self.df, columns=[col], drop_first=True)
+                        reporte[-1]['metodo'] += ' / Dummies'
                 elif es_dummificable:
                     self.df = pd.get_dummies(self.df, columns=[col], drop_first=True)
                     reporte[-1]['metodo'] += ' / Dummies'
                 elif es_texto_bool:
                     self.df.drop(columns=[col], inplace=True)
-                    reporte[-1]['metodo'] += ' / Borrada (No dummificable)'
+                    reporte[-1]['metodo'] += ' / Borrada (No dummificable o Frecuencia < 5%)'
            
         if self.col_target_name:
             self.y = self.df[self.col_target_name].copy()
@@ -436,6 +488,23 @@ class Transformar_Df:
         for col, mapping in self.ordinal_mappings.items():
             if col in df_pred.columns:
                 df_pred[col] = df_pred[col].map(mapping).fillna(-1).astype(int)
+
+        # --- APLICAR MANEJO DE FECHAS EN PREDICCIÓN
+        for col, min_date in self.fecha_referencia.items():
+            if col in df_pred.columns:
+                df_pred[col] = pd.to_datetime(df_pred[col], errors='coerce')
+                df_pred[col] = df_pred[col].fillna(min_date)
+                df_pred[f"{col}_t_paso"] = (df_pred[col] - min_date).dt.days
+                df_pred[f"{col}_anio"] = df_pred[col].dt.year
+                df_pred[f"{col}_mes"] = df_pred[col].dt.month
+                
+                # Usamos la misma lógica: si la columna de entrenamiento tenía días, los extraemos
+                if f"{col}_dia" in self.columnas_entrenamiento:
+                    df_pred[f"{col}_dia"] = df_pred[col].dt.day
+                    df_pred[f"{col}_dia_semana"] = df_pred[col].dt.dayofweek
+                    df_pred[f"{col}_es_fin_semana"] = df_pred[col].dt.dayofweek.isin([5, 6]).astype(int)
+                
+                df_pred.drop(columns=[col], inplace=True)
 
         # 5. Dummies Normales
         df_pred = pd.get_dummies(df_pred)

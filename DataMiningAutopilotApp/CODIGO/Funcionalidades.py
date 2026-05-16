@@ -256,12 +256,20 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
     dtypes = df.dtypes.apply(lambda x: str(x)).to_dict()
     nulls = df.isnull().sum().to_dict()
 
+    # Obtener muestra de datos categóricos para contexto real
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    sample_data = ""
+    if cat_cols:
+        sample_data = "\nMUESTRA DE DATOS CATEGÓRICOS (Primeras 3 filas):\n"
+        sample_data += df[cat_cols].head(3).to_string()
+
     if is_initial:
         prompt = f"""
         Eres un Consultor de Negocio y Estratega de Datos.
         Guia tecnica interna: {guia_tecnica}
         Metadatos: {json.dumps(dtypes)}
         Valores nulos: {json.dumps(nulls)}
+        {sample_data}
 
         TAREA INICIAL:
         1. Presenta un plan inicial de ciencia de datos con un enfoque 100% estratégico.
@@ -269,6 +277,12 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         3. Explica la estrategia de datos y por qué elegiste el modelo sin usar jerga compleja.
         4. Incluye recomendaciones sobre la calidad de la información y variables relevantes.
         5. NUNCA menciones nombres de funciones técnicas internas de Python ni palabras como 'Pipeline', 'JSON' o 'Preprocesamiento' en tus títulos o explicaciones.
+        
+        RESTRICCIONES CRÍTICAS PARA EL JSON (OBLIGATORIO):
+        - Columnas de Nombres, correos, ids, telefono, direccion (name, nombre, apellido, email, phone, address, etc.): DEBES usar "metodo": "drop-column". Está PROHIBIDO usar TargetEncoding o Dummies en ellas, a no ser que el usuario lo pida explícitamente.
+        - Columnas con separadores (genres, tags, keywords): Si ves "|" o muchos espacios en la muestra, DEBES usar "Lematizar": true. Prohibido usar Dummies aquí, a no ser que el usuario lo pida explícitamente.
+        - Todas las columnas del dataset original deben aparecer en reglas_dict.
+        
         6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
         """
     else:
@@ -378,22 +392,55 @@ def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
     Tarea: {tarea}
     Concluye con una recomendacion estrategica.
     """
+    return _enviar_mensaje_ia(chat_session, interp_prompt, "Interpretación de Resultados")
+
+def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, perfiles, tarea):
+    """
+    Función especializada para perfilar clases/clusters usando estadísticas descriptivas.
+    """
+    perfiles_acotados = {k: v for k, v in perfiles.items()} # Evitar saturar contexto si es muy grande
+    
+    interp_prompt = f"""
+    Actúa como un Consultor de Data Science Senior y Estratega de Negocios.
+    
+    CONTEXTO TÉCNICO:
+    Resultados del modelo: {json.dumps(metricas_interfaz)}
+    Variables procesadas: {cols}
+    
+    PERFILAMIENTO DE LOS GRUPOS (ESTADÍSTICAS):
+    {json.dumps(perfiles_acotados)}
+    
+    TAREA ESPECÍFICA:
+    {tarea}
+    
+    INSTRUCCIÓN ADICIONAL:
+    "Después de que aplique un algoritmo de clustering/clasificación obtuve las siguientes métricas relacionadas a cada clase, quiero que me ayudes a perfilar mis clases, dándoles nombres cortos y creativos que generalicen cada clase encontrada basándote en sus estadísticas."
+    
+    REGLAS DE RESPUESTA:
+    1. Usa un tono ejecutivo y estratégico.
+    2. Para cada grupo, presenta su nombre sugerido y una breve justificación basada en los datos.
+    3. Concluye con una recomendación de acción para cada segmento.
+    - Nombres/Identificadores: SIEMPRE propone borrar ("metodo": "drop-column") columnas como IDs, Nombres, Apellidos, RUT, DNI, etc., ya que no aportan valor predictivo, a menos que el usuario indique lo contrario.
+    - Lematización estratégica: Observa las muestras de datos. Si una columna categórica contiene frases, etiquetas separadas por espacios (ej: "acción drama terror") o descripciones largas, DEBES proponer "Lematizar": true.
+    """
+    return _enviar_mensaje_ia(chat_session, interp_prompt, "Perfilamiento de Datos")
+
+def _enviar_mensaje_ia(chat_session, prompt, titulo_log):
     print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Interpretación de Resultados):")
+    print(f"PROMPT ENVIADO A LA IA ({titulo_log}):")
     print("="*60)
-    print(interp_prompt)
+    print(prompt[:1000] + "..." if len(prompt) > 1000 else prompt)
     print("="*60 + "\n")
     
-    response_interp = chat_session.send_message(interp_prompt)
-    explicacion = response_interp.text
+    response = chat_session.send_message(prompt)
     
     print("\n" + "="*60)
-    print("RESPUESTA DE LA IA (Interpretación de Resultados):")
+    print(f"RESPUESTA DE LA IA ({titulo_log}):")
     print("="*60)
-    print(explicacion)
+    print(response.text)
     print("="*60 + "\n")
     
-    return explicacion
+    return response.text
 
 def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
     prompt = f"""

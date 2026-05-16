@@ -19,8 +19,40 @@ from scipy.cluster.hierarchy import dendrogram, linkage
 import warnings
 from uuid import uuid4
 import os
+import matplotlib as mpl
+
+APP_COLORS = {
+    'primary': '#00F2FE',
+    'secondary': '#4FACFE',
+    'accent': '#7000FF',
+    'background': '#0E1117',
+    'text': '#E0E0E0',
+    'success': '#00C853',
+    'error': '#FF5252'
+}
+
+mpl.rcParams['text.color'] = APP_COLORS['text']
+mpl.rcParams['axes.labelcolor'] = APP_COLORS['text']
+mpl.rcParams['xtick.color'] = APP_COLORS['text']
+mpl.rcParams['ytick.color'] = APP_COLORS['text']
+mpl.rcParams['axes.edgecolor'] = '#444444'
+mpl.rcParams['axes.facecolor'] = APP_COLORS['background']
+mpl.rcParams['figure.facecolor'] = APP_COLORS['background']
+mpl.rcParams['grid.color'] = '#222222'
+mpl.rcParams['font.family'] = 'sans-serif'
 
 from sklearn.compose import TransformedTargetRegressor
+
+def _redondear_dict(d, precision=4):
+    """Redondea recursivamente todos los valores numéricos de un diccionario."""
+    if isinstance(d, dict):
+        return {k: _redondear_dict(v, precision) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [_redondear_dict(x, precision) for x in d]
+    elif isinstance(d, (float, np.float64, np.float32)):
+        return round(float(d), precision)
+    else:
+        return d
 
 def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lineal.pkl', seed=123, p_value_threshold=0.05):
     X = X.select_dtypes(include=[np.number]).copy()
@@ -120,6 +152,7 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
         "ruta_modelo_guardado": model_path
     }
     
+    resultados = _redondear_dict(resultados)
     json_resultado = json.dumps(resultados, indent=4, ensure_ascii=False)
 
     paquete_modelo = {
@@ -393,6 +426,8 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
         "mejores_hiperparametros": grid_search.best_params_,
         "ruta_modelo_guardado": model_path
     })
+    
+    resultados = _redondear_dict(resultados)
 
     paquete_modelo = {
         "modelo": mejor_modelo,
@@ -525,6 +560,7 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
         "ruta_modelo_guardado": model_path
     }
     
+    resultados = _redondear_dict(resultados)
     json_resultado = json.dumps(resultados, indent=4, ensure_ascii=False)
 
     paquete_modelo = {
@@ -536,10 +572,11 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     return json_resultado, mejor_modelo, columnas_significativas
 
 class OptimizedClusterModel:
-    def __init__(self, algoritmo, estimator=None, centers=None):
+    def __init__(self, algoritmo, estimator=None, centers=None, labels=None):
         self.algoritmo = algoritmo
         self.estimator = estimator
         self.centers = centers
+        self.labels = labels
 
     def predict(self, X):
         if self.estimator is not None and hasattr(self.estimator, "predict"):
@@ -809,7 +846,8 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     modelo_cluster = OptimizedClusterModel(
         algoritmo=mejor["algoritmo"],
         estimator=mejor["estimator"],
-        centers=mejor["centers"]
+        centers=mejor["centers"],
+        labels=mejor["labels"]
     )
 
     resultados = {
@@ -844,6 +882,7 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), modelo_cluster, X_numeric.columns.tolist()
 
 def _es_clasificacion(y):
@@ -949,7 +988,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     cv_seguro = _cv_seguro(y_train, es_clf, cv_folds)
 
     if es_clf:
-        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, max_iter=500)
+        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, max_iter=1500)
         parametros = {
             "hidden_layer_sizes": [(32,), (64,), (32, 16)],
             "activation": ["relu", "tanh"],
@@ -958,7 +997,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
         }
         scoring = "accuracy"
     else:
-        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, max_iter=700)
+        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, max_iter=1500)
         parametros = {
             "hidden_layer_sizes": [(32,), (64,), (32, 16)],
             "activation": ["relu", "tanh"],
@@ -1080,6 +1119,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_validas.tolist()
 
 def _guardar_error_vs_k(k_values, errores_por_distancia, image_prefix):
@@ -1293,6 +1333,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_validas.tolist()
 
 def KNN(*args, **kwargs):
@@ -1524,4 +1565,5 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_score

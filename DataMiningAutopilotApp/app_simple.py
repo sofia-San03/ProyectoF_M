@@ -4,6 +4,7 @@ import re
 from io import StringIO
 
 import pandas as pd
+import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -26,6 +27,7 @@ from CODIGO.Funcionalidades import (
     load_css,
     iniciar_chat,
     interpretar_resultados,
+    interpretar_resultados_perfilarDatos,
     texto_a_dataframe
 )
 
@@ -110,7 +112,7 @@ if st.session_state.phase == "CARGA":
     st.markdown("<h2 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#bbcabf'>Sube tus datasets para comenzar el procesamiento neuronal.</p><br>", unsafe_allow_html=True)
     
-    uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"])
+    uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx", "json"])
     if uploaded_file:
         if st.session_state.df is not None:
             # Nuevo proyecto: Limpieza de variables para iniciar desde cero sin perder el file cargado
@@ -130,6 +132,12 @@ if st.session_state.phase == "CARGA":
                 except UnicodeDecodeError:
                     uploaded_file.seek(0)
                     st.session_state.df = pd.read_csv(uploaded_file, encoding="latin1")
+            elif uploaded_file.name.endswith(".json"):
+                try:
+                    st.session_state.df = pd.read_json(uploaded_file)
+                except ValueError:
+                    uploaded_file.seek(0)
+                    st.session_state.df = pd.read_json(uploaded_file, lines=True)
             else:
                 st.session_state.df = pd.read_excel(uploaded_file)
             st.session_state.phase = "PROPUESTA"
@@ -158,10 +166,8 @@ elif st.session_state.phase == "PROPUESTA":
         with chat_container:
             for msg in st.session_state.messages_propuesta:
                 with st.chat_message(msg["role"]):
-                    # Limpieza profunda: eliminamos el bloque JSON y cualquier rastro técnico
                     content_to_show = re.sub(r"```json.*?```", "", msg["content"], flags=re.DOTALL)
-                    # Ocultar separadores de Markdown y títulos técnicos
-                    content_to_show = re.sub(r"(?i)-{3,}", "", content_to_show) # Elimina líneas ---
+                    content_to_show = re.sub(r"(?i)-{3,}", "", content_to_show)
                     content_to_show = re.sub(r"(?i)#+.*?Configuraci[oó]n.*?(?:JSON|Preprocesamiento|T[eé]cnica).*?\n?", "", content_to_show)
                     content_to_show = re.sub(r"(?i)#+.*?Pipeline.*?\n?", "", content_to_show)
                     
@@ -210,6 +216,17 @@ elif st.session_state.phase == "PROPUESTA":
             else:
                 st.error(f"Validacion del problema: {mensaje_validacion}")
 
+            # --- LIMPIEZA DE RESULTADOS PREVIOS AL CAMBIAR MODELO O REGLAS ---
+            actual_reglas = conf_data.get("reglas_dict", {})
+            if st.session_state.results is not None:
+                modelo_cambio = st.session_state.results.get("tipo_modelo") != modelo_seleccionado
+                reglas_cambio = st.session_state.results.get("reglas") != actual_reglas
+                
+                if modelo_cambio or reglas_cambio:
+                    st.session_state.results = None
+                    st.session_state.messages_resultados = []
+                    st.session_state.chat_resultados_session = iniciar_chat()
+
             puede_ejecutar = es_valido and MODELOS_DISPONIBLES[modelo_seleccionado]["implementado"]
 
             st.markdown("#### Tratamiento de nulos y columnas")
@@ -240,10 +257,20 @@ elif st.session_state.phase == "PROPUESTA":
 
     with tab2:
         st.markdown("### Reporte Exploratorio Detallado")
-        if not st.session_state.report_html:
-            with st.spinner("Generando reporte interactivo de calidad de datos..."):
-                st.session_state.report_html = AnalizarDatos(st.session_state.df)
-        components.html(st.session_state.report_html, height=1000, scrolling=True)
+        if st.session_state.proposal is None:
+            st.markdown("""
+                <div style="background-color: #1a2c3d; border-left: 5px solid #00f2fe; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <span style="font-size: 20px;">⏳</span> 
+                    <span style="color: #00f2fe; font-weight: 500; margin-left: 10px;">
+                        Por favor espera a que la IA termine de generar la propuesta estratégica antes de ver el reporte de datos.
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            if not st.session_state.report_html:
+                with st.spinner("Generando reporte interactivo de calidad de datos..."):
+                    st.session_state.report_html = AnalizarDatos(st.session_state.df)
+            components.html(st.session_state.report_html, height=1000, scrolling=True)
 
 elif st.session_state.phase == "EJECUCION":
     conf = st.session_state.config_pipeline
@@ -288,6 +315,39 @@ elif st.session_state.phase == "EJECUCION":
                 raise ValueError("No quedaron columnas numericas disponibles para entrenar el modelo.")
 
             modelo_obj, metricas, cols = orquestador_modelos_interno(X_numeric, y, tipo_modelo=modelo_t, n_clusters_fix=n_clusters_fix)
+            
+            # --- PERFILAMIENTO ESTRATÉGICO (SOLO PARA CLUSTERING) ---
+            perfiles = {}
+            if es_modelo_clustering(modelo_t):
+                try:
+                    df_temp = st.session_state.df.loc[X.index].copy()
+                    if hasattr(modelo_obj, 'labels') and modelo_obj.labels is not None:
+                        labels = modelo_obj.labels
+                    else:
+                        labels = modelo_obj.estimator.labels_ if hasattr(modelo_obj, 'estimator') and modelo_obj.estimator else None
+                    
+                    if labels is None:
+                        raise ValueError("No se pudieron obtener las etiquetas del modelo para el perfilamiento.")
+                    
+                    df_temp['__GRUPO__'] = labels
+                    grupos = df_temp['__GRUPO__'].unique()
+                    
+                    for g in grupos:
+                        df_g = df_temp[df_temp['__GRUPO__'] == g]
+                        desc_num = df_g.describe().to_dict()
+                        cat_freqs = {}
+                        for col in df_g.select_dtypes(include=['object', 'category']).columns:
+                            freq = (df_g[col].value_counts(normalize=True) * 100).round(1).to_dict()
+                            cat_freqs[col] = freq
+                        
+                        perfiles[str(g)] = {
+                            "estadisticas_numericas": desc_num,
+                            "distribucion_categorias": cat_freqs,
+                            "tamaño_grupo": len(df_g)
+                        }
+                except Exception as e:
+                    perfiles = {"error": f"No se pudo generar perfilamiento: {e}"}
+
             st.session_state.results = {
                 "modelo": modelo_obj,
                 "metricas": metricas,
@@ -295,7 +355,8 @@ elif st.session_state.phase == "EJECUCION":
                 "tipo_modelo": modelo_t,
                 "target": target,
                 "reglas": reglas,
-                "es_pca": es_pca
+                "es_pca": es_pca,
+                "perfiles": perfiles
             }
 
         st.session_state.phase = "RESULTADOS"
@@ -341,14 +402,20 @@ elif st.session_state.phase == "RESULTADOS":
                                 
                                 df_p = st.session_state.cleaner.transformar_nueva_tupla(df_n)
                                 p = res["modelo"].predict(df_p[res["cols"]])
-                                st.success(f"Resultado predicho: **{p[0]}**")
+                                
+                                # Redondear si es numérico
+                                val_pred = p[0]
+                                if isinstance(val_pred, (float, np.float64, np.float32, np.number)):
+                                    val_pred = round(float(val_pred), 4)
+                                    
+                                st.success(f"Resultado predicho: **{val_pred}**")
                             except Exception as e:
                                 st.error(f"Error en la prediccion por texto: {e}")
                     else:
                         st.warning("Por favor ingresa una descripcion.")
                         
             with tab_file:
-                uploaded_pred = st.file_uploader("Sube tus nuevos datos para predecir", type=["csv", "xlsx"])
+                uploaded_pred = st.file_uploader("Sube tus nuevos datos para predecir", type=["csv", "xlsx", "json"])
                 if st.button("Predecir desde archivo", use_container_width=True):
                     if uploaded_pred:
                         with st.spinner("Procesando y prediciendo..."):
@@ -359,6 +426,12 @@ elif st.session_state.phase == "RESULTADOS":
                                     except UnicodeDecodeError:
                                         uploaded_pred.seek(0)
                                         df_n = pd.read_csv(uploaded_pred, encoding="latin1")
+                                elif uploaded_pred.name.endswith(".json"):
+                                    try:
+                                        df_n = pd.read_json(uploaded_pred)
+                                    except ValueError:
+                                        uploaded_pred.seek(0)
+                                        df_n = pd.read_json(uploaded_pred, lines=True)
                                 else:
                                     df_n = pd.read_excel(uploaded_pred)
                                     
@@ -368,7 +441,11 @@ elif st.session_state.phase == "RESULTADOS":
                                 p = res["modelo"].predict(df_p[res["cols"]])
                                 
                                 df_res = df_n.copy()
-                                df_res['Prediccion'] = p
+                                # Redondear predicciones si son numéricas
+                                if p.dtype.kind in 'fc': # float o complex
+                                    df_res['Prediccion'] = np.round(p.astype(float), 4)
+                                else:
+                                    df_res['Prediccion'] = p
                                 st.success("Predicciones completadas.")
                                 
                                 st.write("Mostrando los primeros 100 registros:")
@@ -407,12 +484,21 @@ elif st.session_state.phase == "RESULTADOS":
                 else:
                     tarea = "Analiza relevancia, fiabilidad, metricas e impacto de negocio."
 
-                explicacion = interpretar_resultados(
-                    st.session_state.chat_resultados_session,
-                    metricas_interfaz,
-                    res['cols'],
-                    tarea
-                )
+                if es_clustering_resultado:
+                    explicacion = interpretar_resultados_perfilarDatos(
+                        st.session_state.chat_resultados_session,
+                        metricas_interfaz,
+                        res['cols'],
+                        res.get('perfiles', {}),
+                        tarea
+                    )
+                else:
+                    explicacion = interpretar_resultados(
+                        st.session_state.chat_resultados_session,
+                        metricas_interfaz,
+                        res['cols'],
+                        tarea
+                    )
                 st.session_state.messages_resultados.append({"role": "assistant", "content": explicacion})
                 st.rerun()
 
@@ -556,7 +642,8 @@ elif st.session_state.phase == "RESULTADOS":
             "clases":        res["metricas"].get("clases_detectadas", []),
             "encodings":     [k for k, v in res.get("reglas", {}).items() if v.get("Dummies") or v.get("TargetEncoding") or v.get("Ordinal") or v.get("WOE")],
             "pca_aplicado":  res.get("es_pca", False),
-            "grid_search":   True
+            "grid_search":   True,
+            "perfilamiento_grupos": res.get("perfiles", {})
         }
         context_prompt = build_model_context_prompt(model_info)
 
