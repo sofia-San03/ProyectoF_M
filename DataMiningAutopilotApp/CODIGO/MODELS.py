@@ -681,7 +681,7 @@ def _guardar_visualizaciones_clustering(X, labels, inercias_codo, k_values, imag
 
     return scatter_path, elbow_path, dendrogram_path
 
-def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_filename='modelo_clustering.pkl', seed=123):
+def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_filename='modelo_clustering.pkl', seed=123, n_clusters_fix=None):
     if X is None or X.empty:
         raise ValueError("Clustering requiere al menos una matriz X con columnas numéricas.")
 
@@ -694,9 +694,12 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     if n_samples < 3:
         raise ValueError("Clustering requiere al menos 3 registros.")
 
-    max_k = min(max_clusters, n_samples - 1)
-    min_k = min(min_clusters, max_k)
-    k_values = list(range(min_k, max_k + 1))
+    if n_clusters_fix is not None:
+        k_values = [int(n_clusters_fix)]
+    else:
+        max_k = min(max_clusters, n_samples - 1)
+        min_k = min(min_clusters, max_k)
+        k_values = list(range(min_k, max_k + 1))
 
     inercias_codo = []
     candidatos = []

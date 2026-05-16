@@ -278,11 +278,12 @@ class Transformar_Df:
         columnas_actuales = [c for c in self.df.columns if c != self.col_target_name]
 
         # --- PREPARAR TARGET ANTES DEL LOOP (Necesario para Target Encoding / WOE) ---
-        self.df.dropna(subset=[self.col_target_name], inplace=True)
-        if ptypes.is_object_dtype(self.df[self.col_target_name]) or ptypes.is_string_dtype(self.df[self.col_target_name]):
-            from sklearn.preprocessing import LabelEncoder
-            le = LabelEncoder()
-            self.df[self.col_target_name] = le.fit_transform(self.df[self.col_target_name].astype(str))
+        if self.col_target_name:
+            self.df.dropna(subset=[self.col_target_name], inplace=True)
+            if ptypes.is_object_dtype(self.df[self.col_target_name]) or ptypes.is_string_dtype(self.df[self.col_target_name]):
+                from sklearn.preprocessing import LabelEncoder
+                le = LabelEncoder()
+                self.df[self.col_target_name] = le.fit_transform(self.df[self.col_target_name].astype(str))
 
         for col in columnas_actuales:
             col_norm = str(col).strip().lower()
@@ -334,8 +335,11 @@ class Transformar_Df:
                     self.df.drop(columns=[col], inplace=True)
                     reporte[-1]['metodo'] += ' / Borrada (No dummificable)'
            
-        self.y = self.df[self.col_target_name].copy()
-        self.df.drop(columns=[self.col_target_name], inplace=True)
+        if self.col_target_name:
+            self.y = self.df[self.col_target_name].copy()
+            self.df.drop(columns=[self.col_target_name], inplace=True)
+        else:
+            self.y = None
         
         for col in self.df.columns:
             if ptypes.is_numeric_dtype(self.df[col]) or ptypes.is_bool_dtype(self.df[col]):

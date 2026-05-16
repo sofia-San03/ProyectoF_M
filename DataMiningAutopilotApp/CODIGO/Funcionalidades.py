@@ -1,6 +1,7 @@
 import json
 import os
 import google.generativeai as genai
+from google.api_core import exceptions
 import pandas as pd
 import streamlit as st
 
@@ -157,9 +158,12 @@ def extraer_configuracion_pipeline(conf):
     modelo_t = conf.get("tipo_modelo", conf.get("modelo", "Regresion_lineal"))
     modelo_normalizado = normalizar_modelo(modelo_t)
     es_pca = conf.get("EsPCA", conf.get("es_pca", False))
+    n_clusters = conf.get("n_clusters", None)
+    
     if MODELOS_DISPONIBLES[modelo_normalizado]["tipo_problema"] == "clustering":
         target = None
-    return target, reglas, modelo_normalizado, es_pca
+        
+    return target, reglas, modelo_normalizado, es_pca, n_clusters
 
 def obtener_metricas_esperadas(modelo_nombre):
     return MODELOS_DISPONIBLES[modelo_nombre]["metricas"]
@@ -211,7 +215,7 @@ def aplicar_limpieza_interna(df, col_target, reglas_dict=None, es_pca=False):
     transformador.Clean_All_Rows(reglas_dict=reglas_dict, EsPCA=es_pca)
     return transformador, transformador.df, transformador.y
 
-def orquestador_modelos_interno(X, y, tipo_modelo):
+def orquestador_modelos_interno(X, y, tipo_modelo, n_clusters_fix=None):
     modelo_nombre = normalizar_modelo(tipo_modelo)
     info_modelo = MODELOS_DISPONIBLES[modelo_nombre]
 
@@ -223,7 +227,11 @@ def orquestador_modelos_interno(X, y, tipo_modelo):
     if y is None and info_modelo["tipo_problema"] != "clustering":
         raise ValueError(f"El modelo '{modelo_nombre}' requiere variable objetivo.")
 
-    json_res, modelo, cols = info_modelo["funcion"](X, y)
+    if info_modelo["tipo_problema"] == "clustering":
+        json_res, modelo, cols = info_modelo["funcion"](X, y, n_clusters_fix=n_clusters_fix)
+    else:
+        json_res, modelo, cols = info_modelo["funcion"](X, y)
+        
     return modelo, json.loads(json_res), cols
 
 def es_modelo_clustering(tipo_modelo):
@@ -286,29 +294,79 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
     print(prompt)
     print("="*60 + "\n")
     
-    response = chat_session.send_message(prompt)
-    
-    print("\n" + "="*60)
-    print("RESPUESTA DE LA IA (Propuesta Estratégica):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
-    
-    return response.text
+    try:
+        response = chat_session.send_message(prompt)
+        
+        print("\n" + "="*60)
+        print("RESPUESTA DE LA IA (Propuesta Estratégica):")
+        print("="*60)
+        print(response.text)
+        print("="*60 + "\n")
+        
+        return response.text
+    except exceptions.ResourceExhausted:
+        return "⚠️ **Error de Cuota Superado (429):** El Agente IA ha recibido demasiadas solicitudes en poco tiempo. Por favor, espera unos 30 segundos antes de volver a preguntar o intentar otro ajuste. Esto se debe a los límites de la capa gratuita de Gemini."
+    except Exception as e:
+        return f"⚠️ **Error al conectar con la IA:** {str(e)}"
 
-def chat_resultados_ia(chat_session, mensaje_usuario):
+def chat_resultados_ia_stream(chat_session, mensaje_usuario, model_context_prompt):
     prompt = f"""
-    Eres un Consultor Senior de Data Science conversando con el usuario sobre los resultados del modelo. 
-    Aplica el contexto del análisis previo (las métricas y conclusiones que discutimos) para responder a su nueva duda.
+    [INSTRUCCIONES DEL SISTEMA]
+    {model_context_prompt}
     
-    NUEVA PREGUNTA/COMENTARIO DEL USUARIO: "{mensaje_usuario}"
-    
-    TAREA:
-    Responde a las dudas del usuario enfocándote en el negocio, datos y algoritmos.
-    NO hables de código ni menciones funciones técnicas de Python. Sé claro, profesional y estratégico.
+    [NUEVA PREGUNTA DEL USUARIO]
+    "{mensaje_usuario}"
     """
-    response = chat_session.send_message(prompt)
-    return response.text
+    try:
+        response = chat_session.send_message(prompt, stream=True)
+        return response
+    except exceptions.ResourceExhausted:
+        st.error("⚠️ **Error de Cuota (429):** Límite alcanzado. Espera 30 segundos.")
+        return None
+    except Exception as e:
+        st.error(f"⚠️ **Error:** {str(e)}")
+        return None
+
+def build_model_context_prompt(model_info: dict) -> str:
+    tipo        = model_info.get("tipo_modelo", "No especificado")
+    target      = model_info.get("variable_obj", "No especificada")
+    metricas    = model_info.get("metricas", {})
+    n_reg       = model_info.get("n_registros", "—")
+    n_feat      = model_info.get("n_features", "—")
+    clases      = model_info.get("clases", [])
+    encodings   = model_info.get("encodings", [])
+    pca         = model_info.get("pca_aplicado", False)
+    grid        = model_info.get("grid_search", False)
+
+    metricas_str = "\n".join(f"    - {k}: {v}" for k, v in metricas.items()) if metricas else "    - No disponibles"
+    clases_str   = ", ".join(str(c) for c in clases) if clases else "—"
+    enc_str      = ", ".join(encodings) if encodings else "No especificados"
+
+    return f"""Eres un asistente experto en Machine Learning integrado en "Data Mining Autopilot".
+    Tu misión es ayudar al usuario a entender e interpretar el modelo recién entrenado.
+
+    ════════════════════════════════════════
+    CONTEXTO DEL MODELO ENTRENADO
+    ════════════════════════════════════════
+      Tipo de modelo       : {tipo}
+      Variable objetivo    : {target}
+      Clases (si aplica)   : {clases_str}
+      Registros            : {n_reg}
+      Features usadas      : {n_feat}
+      Encodings aplicados  : {enc_str}
+      PCA aplicado         : {"Sí" if pca else "No"}
+      GridSearchCV usado   : {"Sí" if grid else "No"}
+
+      Métricas obtenidas:
+    {metricas_str}
+    ════════════════════════════════════════
+
+    INSTRUCCIONES:
+      1. Responde siempre en español, de forma clara y útil.
+      2. Traduce métricas técnicas a lenguaje de negocio.
+      3. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
+      4. Sé conciso pero completo.
+    """
 
 def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
     interp_prompt = f"""

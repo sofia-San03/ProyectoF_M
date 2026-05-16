@@ -26,14 +26,15 @@ h4 {
 
 h1 {
     color: #4edea3 !important;
-    font-weight: 800 !important;
+    font-weight: 1200 !important;
     letter-spacing: -1px;
-    font-size: 2.8rem !important;
+    font-size: 4rem !important;
+    text-align: center;
 }
 
 h2 {
-    font-size: 2.2rem !important;
-    color: #dfe2f1 !important;
+    font-size: 2.5rem !important;
+    color: #4edea3 !important;
 }
 
 h3 {
@@ -59,31 +60,40 @@ h3 {
 }
 
 /* Primary buttons (Active Nav Tab, Reiniciar) */
-.stButton>button[data-testid="baseButton-primary"] {
-    background: #4edea3 !important;
+.stButton button[kind="primary"],
+div[data-testid="stBaseButton-primary"] button {
+    background-color: #4edea3 !important;
+    /* Color menta sólido del título */
     color: #003824 !important;
+    /* Texto oscuro para contraste */
     border: none !important;
-    box-shadow: 0 0 20px rgba(78, 222, 163, 0.15) !important;
+    box-shadow: 0 0 15px rgba(78, 222, 163, 0.4) !important;
 }
 
-.stButton>button[data-testid="baseButton-primary"]:hover {
+.stButton button[kind="primary"]:hover,
+div[data-testid="stBaseButton-primary"] button:hover {
     transform: translateY(-2px) !important;
-    box-shadow: 0 0 30px rgba(78, 222, 163, 0.3) !important;
-    filter: brightness(1.1);
+    filter: brightness(1.1) !important;
+    box-shadow: 0 0 25px rgba(78, 222, 163, 0.6) !important;
 }
 
 /* Secondary buttons (Inactive Nav Tabs) */
-.stButton>button[data-testid="baseButton-secondary"] {
-    background-color: #1f2533 !important; /* Ligeramente más claro que el sidebar (#171b26) */
+.stButton button[kind="secondary"],
+div[data-testid="stBaseButton-secondary"] button {
+    background-color: #1f2533 !important;
+    /* Ligeramente más claro que el sidebar (#171b26) */
     color: #dfe2f1 !important;
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
     box-shadow: none !important;
 }
 
-.stButton>button[data-testid="baseButton-secondary"]:hover {
-    background-color: #2a3245 !important; /* Aún más claro al pasar el mouse */
+.stButton button[kind="secondary"]:hover,
+div[data-testid="stBaseButton-secondary"] button:hover {
+    background-color: #2a3245 !important;
+    /* Aún más claro al pasar el mouse */
     border-color: rgba(78, 222, 163, 0.4) !important;
-    color: #4edea3 !important; /* Brillo teal tenue en el texto al hacer hover */
+    color: #4edea3 !important;
+    /* Brillo menta en el texto al hacer hover */
     transform: translateY(-2px) !important;
 }
 
@@ -198,6 +208,7 @@ thead tr th {
     background-color: #171b26;
     border-radius: 10px 10px 0 0;
     padding: 10px 20px;
+    height: 25px;
     color: #bbcabf;
     font-family: 'Sora', sans-serif;
     font-weight: 600;
@@ -206,4 +217,52 @@ thead tr th {
 .stTabs [aria-selected="true"] {
     background-color: #4edea3 !important;
     color: #003824 !important;
+}
+
+[data-testid="stChatInput"] {
+    border-radius: 16px !important;
+    background-color: rgba(31, 37, 51, 0.9) !important;
+    border: none !important;
+    padding: 10px 15px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+    transition: all 0.3s ease !important;
+    margin-top: 10px;
+}
+
+[data-testid="stChatInput"]:focus-within {
+    border: none !important;
+    box-shadow: none !important;
+    background-color: #171b26 !important;
+}
+
+[data-testid="stChatInputTextArea"] {
+    min-height: 60px !important;
+    font-size: 1.15rem !important;
+    color: #b1c4bc7b !important;
+    font-family: 'Sora', sans-serif !important;
+    line-height: 1.5 !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stChatInputTextArea"] textarea {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Estilizar el botón de Enviar dentro del chat */
+[data-testid="stChatInput"] button {
+    background-color: rgba(78, 222, 163, 0.1) !important;
+    color: #4edea3 !important;
+    border-radius: 50% !important;
+    transition: all 0.3s ease !important;
+    transform: scale(1.1);
+}
+
+[data-testid="stChatInput"] button:hover {
+    background-color: #4edea3 !important;
+    color: #003824 !important;
+    transform: scale(1.2);
 }

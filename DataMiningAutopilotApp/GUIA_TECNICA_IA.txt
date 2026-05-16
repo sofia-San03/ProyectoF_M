@@ -7,6 +7,7 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 {
   "target": "nombre_columna_objetivo",
   "modelo": "Regresion_lineal" | "Regresion_logistica" | "Arbol_decision" | "Clustering_optimizacion" | "Redes_neuronales" | "KNN" | "Credit_scoring",
+  "n_clusters": null | N,
   "reglas_dict": {
     "columna_ejemplo": {
       "metodo": "mean" | "median" | "mode" | "drop-values" | "drop-column",
@@ -50,6 +51,7 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 - bins_woe: numero de bins para calcular WOE/IV en variables numericas.
 - Ordinal: aplica codificacion ordinal. Requiere orden.
 - orden: lista con el orden logico de categorias, por ejemplo ["bajo", "medio", "alto"].
+- n_clusters: (OPCIONAL, SOLO PARA CLUSTERING) Si el usuario o la IA definen un numero entero N, el modelo usara exactamente N clusters. Si es null o no se incluye, el sistema encontrara el numero optimo automaticamente (AUTO).
 
 4. REGLAS DE ORO Y RESTRICCIONES
 
@@ -87,6 +89,7 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 {
   "target": null,
   "modelo": "Clustering_optimizacion",
+  "n_clusters": 5,
   "reglas_dict": {
     "segmento": { "Dummies": true, "MaxDummies": 12 },
     "fecha_alta": { "metodo": "drop-column" },

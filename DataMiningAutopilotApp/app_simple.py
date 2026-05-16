@@ -57,14 +57,15 @@ if "messages_resultados" not in st.session_state:
 
 
 st.title("  Data mining Autopilot ")
-st.text("Automatizacion del preprocesamiento de datos y entrenamiento de modelos de machine learning")
+st.text("Automatización del preprocesamiento de datos y entrenamiento de modelos de machine learning")
 
 # Navegación Lateral (Sidebar)
-opciones_nav = ["Carga de Datos"]
-if st.session_state.df is not None:
-    opciones_nav.append("Propuesta")
-if st.session_state.results is not None:
-    opciones_nav.append("Resultados y Predicción")
+if st.session_state.phase == "CARGA":
+    opciones_nav = ["Carga de Datos"]
+else:
+    opciones_nav = ["Propuesta"]
+    if st.session_state.results is not None:
+        opciones_nav.append("Resultados y Predicción")
 
 map_phase_to_nav = {
     "CARGA": "Carga de Datos",
@@ -110,7 +111,7 @@ with st.sidebar:
         st.rerun()
 
 if st.session_state.phase == "CARGA":
-    st.markdown("<h1 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h1>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#bbcabf'>Sube tus datasets para comenzar el procesamiento neuronal.</p><br>", unsafe_allow_html=True)
     
     uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"])
@@ -161,8 +162,12 @@ elif st.session_state.phase == "PROPUESTA":
         with chat_container:
             for msg in st.session_state.messages_propuesta:
                 with st.chat_message(msg["role"]):
-                    content_to_show = re.sub(r"```json.*?```", "", msg["content"], flags=re.DOTALL).strip()
-                    st.markdown(content_to_show)
+                    content_to_show = re.sub(r"```json.*?```", "", msg["content"], flags=re.DOTALL)
+                    # Ocultar títulos relacionados a la configuración JSON
+                    content_to_show = re.sub(r"(?i)#+.*?Configuraci[oó]n.*?(?:JSON|Preprocesamiento).*?\n?", "", content_to_show)
+                    content_to_show = content_to_show.strip()
+                    if content_to_show:
+                        st.markdown(content_to_show)
         
         if user_input := st.chat_input("Escribe tus dudas o pide ajustes al plan..."):
             st.session_state.messages_propuesta.append({"role": "user", "content": user_input})
@@ -176,7 +181,7 @@ elif st.session_state.phase == "PROPUESTA":
         st.markdown("### Configuracion Tecnica")
         try:
             conf_data = json.loads(json_str) if json_str != "{}" else {}
-            target_detectado, reglas_detectadas, modelo_detectado, es_pca_detectado = extraer_configuracion_pipeline(conf_data)
+            target_detectado, reglas_detectadas, modelo_detectado, es_pca_detectado, n_clusters_detectado = extraer_configuracion_pipeline(conf_data)
             opciones_modelos = list(MODELOS_DISPONIBLES.keys())
             modelo_seleccionado = st.selectbox(
                 "Modelo detectado",
@@ -186,17 +191,14 @@ elif st.session_state.phase == "PROPUESTA":
             conf_data["modelo"] = modelo_seleccionado
             conf_data["tipo_modelo"] = modelo_seleccionado
 
-            target_validacion = (
-                None
-                if MODELOS_DISPONIBLES[modelo_seleccionado]["tipo_problema"] == "clustering"
-                else target_detectado
-            )
-            if target_validacion is None:
-                conf_data["target"] = None
-                conf_data["col_target"] = None
-
-            target_mostrado = target_validacion if target_validacion else "No requerido"
-            st.markdown(f"**Variable Objetivo:** `{target_mostrado}`")
+            if MODELOS_DISPONIBLES[modelo_seleccionado]["tipo_problema"] == "clustering":
+                n_clusters_mostrado = str(n_clusters_detectado) if n_clusters_detectado else "AUTO"
+                st.markdown(f"**Número de Clusters:** `{n_clusters_mostrado}`")
+                target_validacion = None
+            else:
+                target_mostrado = target_detectado if target_detectado else "⚠️ Pendiente de definir"
+                st.markdown(f"**Variable Objetivo:** `{target_mostrado}`")
+                target_validacion = target_detectado
             st.markdown(f"**Modelo sugerido:** `{modelo_seleccionado}`")
             st.markdown(f"**Metricas esperadas:** `{', '.join(obtener_metricas_esperadas(modelo_seleccionado))}`")
 
@@ -231,7 +233,7 @@ elif st.session_state.phase == "PROPUESTA":
 
         col_empty, col_exec = st.columns([3, 1])
         with col_exec:
-            if st.button("🚀 Ejecutar Pipeline", use_container_width=True, disabled=not puede_ejecutar):
+            if st.button(" Ejecutar Pipeline", use_container_width=True, disabled=not puede_ejecutar, key="btn_ejecutar_pipeline"):
                 st.session_state.config_pipeline = conf_data
                 st.session_state.phase = "EJECUCION"
                 st.rerun()
@@ -254,7 +256,7 @@ elif st.session_state.phase == "EJECUCION":
         os.makedirs("Resultados", exist_ok=True)
         os.makedirs("MODELOS", exist_ok=True)
 
-        target, reglas, modelo_t, es_pca = extraer_configuracion_pipeline(conf)
+        target, reglas, modelo_t, es_pca, n_clusters_fix = extraer_configuracion_pipeline(conf)
 
         with st.spinner("Iniciando limpieza automatizada..."):
             cleaner, X, y = aplicar_limpieza_interna(
@@ -285,12 +287,15 @@ elif st.session_state.phase == "EJECUCION":
             if X_numeric.empty:
                 raise ValueError("No quedaron columnas numericas disponibles para entrenar el modelo.")
 
-            modelo_obj, metricas, cols = orquestador_modelos_interno(X_numeric, y, tipo_modelo=modelo_t)
+            modelo_obj, metricas, cols = orquestador_modelos_interno(X_numeric, y, tipo_modelo=modelo_t, n_clusters_fix=n_clusters_fix)
             st.session_state.results = {
                 "modelo": modelo_obj,
                 "metricas": metricas,
                 "cols": cols,
                 "tipo_modelo": modelo_t,
+                "target": target,
+                "reglas": reglas,
+                "es_pca": es_pca
             }
 
         st.session_state.phase = "RESULTADOS"
@@ -533,20 +538,63 @@ elif st.session_state.phase == "RESULTADOS":
                     }
                 )
 
-        st.markdown("---")
         st.markdown("### Chat de Resultados")
         chat_container_res = st.container(height=400)
         with chat_container_res:
             for msg in st.session_state.messages_resultados:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
-        
-        from CODIGO.Funcionalidades import chat_resultados_ia
-        if user_input_res := st.chat_input("Pregunta dudas sobre el modelo, métricas o negocio..."):
-            st.session_state.messages_resultados.append({"role": "user", "content": user_input_res})
-            with st.spinner("Procesando tu solicitud..."):
-                respuesta_res = chat_resultados_ia(st.session_state.chat_resultados_session, user_input_res)
-                st.session_state.messages_resultados.append({"role": "assistant", "content": respuesta_res})
-            st.rerun()
 
+        from CODIGO.Funcionalidades import chat_resultados_ia_stream, build_model_context_prompt
+        
+        # Preparar contexto para la IA
+        model_info = {
+            "tipo_modelo":   tipo_modelo,
+            "variable_obj":  res.get("target") if res.get("target") else "No requerida",
+            "metricas":      res["metricas"].get("metricas_precision", {}),
+            "n_registros":   len(st.session_state.df),
+            "n_features":    len(res["cols"]),
+            "clases":        res["metricas"].get("clases_detectadas", []),
+            "encodings":     [k for k, v in res.get("reglas", {}).items() if v.get("Dummies") or v.get("TargetEncoding") or v.get("Ordinal") or v.get("WOE")],
+            "pca_aplicado":  res.get("es_pca", False),
+            "grid_search":   True
+        }
+        context_prompt = build_model_context_prompt(model_info)
+
+        # Chips de preguntas rápidas
+        CHIPS = [
+            "¿Cómo interpreto estas métricas?",
+            "¿Hay riesgo de overfitting?",
+            "¿Qué features son más importantes?",
+            "¿Cómo puedo mejorar el modelo?",
+            "Explica el preprocesamiento aplicado",
+            "Traduce los resultados a lenguaje de negocio",
+        ]
+        
+        st.markdown("**Preguntas rápidas:**")
+        cols_chips = st.columns(len(CHIPS))
+        pregunta_chip = None
+        for i, chip in enumerate(CHIPS):
+            if cols_chips[i].button(chip, key=f"chip_{i}", use_container_width=True):
+                pregunta_chip = chip
+
+        if user_input_res := st.chat_input("Pregunta dudas sobre el modelo, métricas o negocio...") or pregunta_chip:
+            pregunta_final = user_input_res if user_input_res else pregunta_chip
+            st.session_state.messages_resultados.append({"role": "user", "content": pregunta_final})
+            
+            # Mostrar el mensaje del usuario inmediatamente antes del stream
+            with chat_container_res:
+                with st.chat_message("user"):
+                    st.markdown(pregunta_final)
+            
+            with chat_container_res:
+                with st.chat_message("assistant"):
+                    response_stream = chat_resultados_ia_stream(
+                        st.session_state.chat_resultados_session, 
+                        pregunta_final, 
+                        context_prompt
+                    )
+                    if response_stream:
+                        respuesta_completa = st.write_stream(chunk.text for chunk in response_stream if hasattr(chunk, "text"))
+                        st.session_state.messages_resultados.append({"role": "assistant", "content": respuesta_completa})
             st.rerun()
