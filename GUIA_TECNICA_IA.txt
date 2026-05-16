@@ -1,4 +1,4 @@
-📘 GUÍA TÉCNICA PARA LA IA: reglas_dict
+GUÍA TÉCNICA PARA LA IA: reglas_dict
 
 Este documento define el formato exacto en que la IA debe generar la configuración para el método Clean_All_Rows.
 

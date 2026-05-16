@@ -38,7 +38,7 @@ class Transformar_Df:
         self.target_encodings = {}
         self.columnas_entrenamiento = None
         
-        # --- VARIABLES DE "MEMORIA" PARA INFERENCIA ---
+        # VARIABLES DE MEMORIA PARA INFERENCIA
         self.reglas_entrenamiento = {}
         self.imputaciones_nulos = {}
         self.backup_imputaciones = {}
@@ -142,7 +142,6 @@ class Transformar_Df:
 
 
     def calcular_woe_iv(self, df_temp, col, target_name):
-
         target_series = pd.to_numeric(df_temp[target_name], errors='coerce').fillna(0).astype(float)
         df_temp[target_name] = target_series
         
@@ -169,8 +168,8 @@ class Transformar_Df:
         
         return woe_dict, iv_total
 
+    # Aplica la transformación WOE si el IV es > 0.1
     def aplicar_woe_columna(self, col, bins_count=5):
-        """Aplica la transformación WOE si el IV es > 0.1."""
         if self.df[col].nunique() < 2:
             return None
 
@@ -220,15 +219,15 @@ class Transformar_Df:
         self.df[columna] = self.df[columna].where(self.df[columna].isin(categorias_validas), "otros")
         return True
 
+    # Aplica Target Encoding (reemplaza categorías por la media del target)
     def aplicar_target_encoding(self, columna):
-        """Aplica Target Encoding (reemplaza categorías por la media del target)."""
         medias = self.df.groupby(columna)[self.col_target_name].mean()
         media_global = self.df[self.col_target_name].mean()
         self.target_encodings[columna] = {'medias': medias.to_dict(), 'global': media_global}
         self.df[columna] = self.df[columna].map(medias).fillna(media_global)
 
+    # Aplica Ordinal Encoding a una columna basada en un orden lógico
     def aplicar_ordinal_encoding(self, columna, orden=None):
-        """Aplica Ordinal Encoding a una columna basada en un orden lógico."""
         if orden is None:
             orden = sorted(self.df[columna].unique().tolist())
         
@@ -247,7 +246,6 @@ class Transformar_Df:
 
         self.reglas_entrenamiento = reglas_dict.copy()
 
-
         df_id = None
         if self.id_column and self.id_column in self.df.columns:
             df_id = self.df[[self.id_column]].copy()
@@ -255,7 +253,6 @@ class Transformar_Df:
 
         columnas_actuales = [c for c in self.df.columns if c != self.col_target_name]
 
-        # --- PREPARAR TARGET ANTES DEL LOOP (Necesario para Target Encoding / WOE) ---
         self.df.dropna(subset=[self.col_target_name], inplace=True)
         if ptypes.is_object_dtype(self.df[self.col_target_name]) or ptypes.is_string_dtype(self.df[self.col_target_name]):
             from sklearn.preprocessing import LabelEncoder
@@ -303,8 +300,6 @@ class Transformar_Df:
                     self.df.drop(columns=[col], inplace=True)
                     reporte[-1]['metodo'] += ' / Borrada (No dummificable)'
 
-        # El target ya fue procesado al inicio para permitir TargetEncoding
-            
         self.y = self.df[self.col_target_name].copy()
         self.df.drop(columns=[self.col_target_name], inplace=True)
         
@@ -333,7 +328,6 @@ class Transformar_Df:
             self.pca = PCA(n_components=n_comp)
             componentes = self.pca.fit_transform(self.df)
             self.df = pd.DataFrame(componentes, columns=[f'PC{i+1}' for i in range(n_comp)], index=self.df.index)
-
 
         print(reporte)
         return reporte
@@ -378,12 +372,12 @@ class Transformar_Df:
                 # Crear la matriz de texto solo con las palabras que sobrevivieron en entrenamiento
                 for c_mantener in cols_a_mantener:
                     if c_mantener not in df_dummies_texto.columns:
-                        df_dummies_texto[c_mantener] = 0 # Llenar con 0 si la palabra no viene en los datos nuevos
+                        df_dummies_texto[c_mantener] = 0
                 
                 df_filtrado = df_dummies_texto[cols_a_mantener]
                 df_pred = pd.concat([df_pred.drop(columns=[col]), df_filtrado], axis=1)
 
-        #Reemplazar por "otros" si son categorías nuevas o no pasaron el umbral en entrenamiento
+        # Reemplazar por otros si son categorías nuevas o no pasaron el umbral en entrenamiento
         for col, categorias_validas in self.categorias_validas.items():
             if col in df_pred.columns:
                 df_pred[col] = df_pred[col].where(df_pred[col].isin(categorias_validas), "otros")
@@ -393,22 +387,21 @@ class Transformar_Df:
             if col in df_pred.columns:
                 df_pred[col] = df_pred[col].map(info['medias']).fillna(info['global'])
 
-        # --- APLICAR WOE
+        # APLICAR WOE
         for col, mapping in self.woe_mappings.items():
             if col in df_pred.columns:
                 binned = pd.cut(df_pred[col], bins=mapping['bins_edges'], include_lowest=True)
                 df_pred[col] = binned.map(mapping['woe_dict']).astype(float)
 
-        # --- APLICAR ORDINAL ENCODING 
+        # APLICAR ORDINAL ENCODING 
         for col, mapping in self.ordinal_mappings.items():
             if col in df_pred.columns:
                 df_pred[col] = df_pred[col].map(mapping).fillna(-1).astype(int)
 
-        # 5. Dummies Normales
-        df_pred = pd.get_dummies(df_pred)
-
+        # Dummies Normales
         # Si una columna de entrenamiento no existe la crea con 0.
         # Si hay columnas extra en los datos nuevos, las borra.
+        df_pred = pd.get_dummies(df_pred)
         df_pred = df_pred.reindex(columns=self.columnas_entrenamiento, fill_value=0)
 
         # Convertir booleanos residuales a enteros

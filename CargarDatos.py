@@ -4,6 +4,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import pandas as pd
 
+try:
+    from ydata_profiling import ProfileReport
+    _YDATA_AVAILABLE = True
+except ModuleNotFoundError:
+    _YDATA_AVAILABLE = False
+
 def CargarDatos():
     root = tk.Tk()
     root.withdraw()
@@ -18,7 +24,6 @@ def CargarDatos():
         return
 
     data_dir = os.path.join(os.getcwd(), 'data')
-    
     os.makedirs(data_dir, exist_ok=True)
     print(f"Carpeta de destino: {data_dir}")
 
@@ -27,8 +32,6 @@ def CargarDatos():
         try:
             filename = os.path.basename(file_path)
             destination = os.path.join(data_dir, filename)
-            
-
             shutil.copy2(file_path, destination)
             copied_files += 1
             print(f"Archivo copiado exitosamente: {filename}")
@@ -42,8 +45,8 @@ def CargarDatos():
         mensaje = "No se pudo copiar ningún archivo."
         print(mensaje)
 
+
 def seleccionar_y_cargar_df():
-    """Abre el explorador de archivos y devuelve el DataFrame del archivo seleccionado."""
     root = tk.Tk()
     root.withdraw()
     file_path = filedialog.askopenfilename(
@@ -53,11 +56,12 @@ def seleccionar_y_cargar_df():
     if not file_path:
         print("No se seleccionó ningún archivo.")
         return None
-    
+
     if file_path.endswith('.csv'):
         return pd.read_csv(file_path)
     else:
         return pd.read_excel(file_path)
+
 
 def obtener_dataframe_reciente():
     data_dir = os.path.join(os.getcwd(), 'data')
@@ -70,13 +74,67 @@ def obtener_dataframe_reciente():
     print(f"Cargando archivo más reciente: {latest_file}")
     return pd.read_csv(latest_file)
 
-def AnalizarDatos(df):
-    from ydata_profiling import ProfileReport
-    profile = ProfileReport(df, title="Análisis Exploratorio Autopilot", explorative=True)
-    return profile.to_html()
 
+def _fallback_profile_html(df: pd.DataFrame) -> str:
+    shape     = df.shape
+    nulls     = df.isnull().sum().reset_index()
+    nulls.columns = ["Columna", "Nulos"]
+    nulls["% Nulos"] = (nulls["Nulos"] / shape[0] * 100).round(2)
+
+    describe_html = df.describe(include="all").T.to_html(classes="table", border=0)
+    nulls_html    = nulls.to_html(index=False, classes="table", border=0)
+    head_html     = df.head(10).to_html(index=False, classes="table", border=0)
+
+    css = """
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; background: #0f172a; color: #e2e8f0; }
+      h2   { color: #10b981; }
+      .table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+      .table th, .table td { border: 1px solid #334155; padding: 6px 10px; text-align: left; }
+      .table th { background: #1e293b; color: #10b981; }
+      .table tr:nth-child(even) { background: #1e293b55; }
+    </style>
+    """
+    warn = (
+        "<div style='background:#b45309;padding:10px;border-radius:8px;margin-bottom:16px;'>"
+        "⚠️ <b>ydata-profiling no está instalado</b> — mostrando reporte básico. "
+        "Instala con: <code>pip install ydata-profiling</code>"
+        "</div>"
+    )
+    return f"""
+    {css}
+    {warn}
+    <h2>📊 Reporte Exploratorio (Fallback)</h2>
+    <p><b>Filas:</b> {shape[0]} &nbsp;|&nbsp; <b>Columnas:</b> {shape[1]}</p>
+    <h2>🔍 Nulos por Columna</h2>{nulls_html}
+    <h2>📈 Estadísticas Descriptivas</h2>{describe_html}
+    <h2>👀 Primeras 10 Filas</h2>{head_html}
+    """
+
+
+def AnalizarDatos(df: pd.DataFrame) -> str:
+    if _YDATA_AVAILABLE:
+        profile = ProfileReport(
+            df,
+            title="Análisis Exploratorio Autopilot",
+            explorative=True,
+            # Mejoras de rendimiento para datasets grandes
+            samples={"head": 10, "tail": 10},
+            correlations={
+                "auto": {"calculate": True},
+                "pearson": {"calculate": True},
+                "spearman": {"calculate": False},
+                "kendall": {"calculate": False},
+                "phi_k": {"calculate": False},
+                "cramers": {"calculate": False},
+            },
+        )
+        return profile.to_html()
+    else:
+        return _fallback_profile_html(df)
 
 if __name__ == "__main__":
     CargarDatos()
-    df= pd.read_csv("data/movies.csv")
-    AnalizarDatos(df)
+    df = pd.read_csv("data/movies.csv")
+    html = AnalizarDatos(df)
+    print(html[:500])
