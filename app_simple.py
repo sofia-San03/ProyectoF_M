@@ -14,8 +14,9 @@ from CleanData import Transformar_Df
 from MODELS import (
     Regresion_lineal, Regresion_logistica, Arbol_decision,
     Random_Forest_Regressor, Random_Forest_Clasificador,
-    XGBoost_Regressor, XGBoost_Clasificador,
-    KMeans_Clustering,
+    Red_Neuronal_Regressor, Red_Neuronal_Clasificador,
+    KNN_Regressor, KNN_Clasificador,
+    KMeans_Clustering, KMedoids_Clustering, KMedianas_Clustering,
 )
 from CargarDatos import AnalizarDatos
 import streamlit.components.v1 as components
