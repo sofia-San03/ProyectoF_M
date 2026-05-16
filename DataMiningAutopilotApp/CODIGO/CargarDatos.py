@@ -72,10 +72,7 @@ def obtener_dataframe_reciente():
 
 def AnalizarDatos(df):
     from ydata_profiling import ProfileReport
-    # Si el dataset es muy grande (> 100k filas), activamos el modo minimalista
-    # para evitar que la aplicación se congele o se quede sin memoria.
     if len(df) > 100000:
-        # Tomamos una muestra para el reporte si es masivo (>500k) para mantener fluidez
         sample_size = 200000 if len(df) > 500000 else len(df)
         df_sample = df.sample(sample_size, random_state=42) if len(df) > sample_size else df
         profile = ProfileReport(df_sample, title="Análisis Exploratorio (Modo Optimizado)", minimal=True)
