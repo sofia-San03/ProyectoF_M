@@ -11,3 +11,4 @@ matplotlib
 joblib
 openpyxl
 ydata-profiling
+category_encoders

@@ -2,7 +2,7 @@
 
 Este proyecto es una aplicación de **Streamlit** diseñada para automatizar el ciclo de vida de la ciencia de datos, desde la carga y limpieza de datos hasta el entrenamiento de modelos de Machine Learning y la interpretación estratégica de los resultados utilizando Inteligencia Artificial.
 
-## 🚀 Instrucciones de Uso
+## Instrucciones de Uso
 
 ### Requisitos Previos
 - Tener instalado Python.
@@ -19,9 +19,9 @@ La función principal y punto de entrada de la aplicación es `app_simple.py`.
 
 ---
 
-## 🎯 Alcance del Proyecto
+##  Alcance del Proyecto
 
-### ✅ ¿Qué puede hacer?
+### ¿Qué puede hacer?
 - **Carga Versátil**: Soporta archivos en formato `.csv` y `.xlsx`.
 - **Análisis Exploratorio (EDA)**: Genera reportes interactivos detallados sobre la calidad y distribución de los datos de forma automática.
 - **Consultoría de IA**: Integra un agente de IA (Gemini) que analiza los metadatos de tu archivo para proponer una estrategia de limpieza y modelado personalizada.
@@ -39,9 +39,7 @@ La función principal y punto de entrada de la aplicación es `app_simple.py`.
 - **Interpretación Estratégica**: La IA traduce las métricas técnicas (R², Accuracy, F1, etc.) a lenguaje de negocio y recomendaciones accionables.
 - **Predicciones en Tiempo Real**: Permite realizar predicciones sobre nuevos datos ingresados en formato CSV.
 
-### ❌ ¿Qué no puede hacer? (Limitaciones)
-- **Modelos Complejos**: Actualmente no soporta modelos de ensamble avanzados (XGBoost, Random Forest) o Deep Learning.
-- **Clasificación Multiclase**: El flujo de clasificación actual está optimizado principalmente para variables objetivo binarias.
+### ¿Qué no puede hacer? (Limitaciones)
 - **Datos no Tabulares**: No está diseñado para procesar imágenes, audio o video; se enfoca exclusivamente en datos estructurados (tablas).
 - **Big Data**: Al ser una aplicación in-memory basada en Pandas y Streamlit, puede tener limitaciones de rendimiento con conjuntos de datos extremadamente grandes (millones de filas).
 - **Dependencia de API**: Requiere una conexión activa a internet y una clave válida de Gemini para las funciones de estrategia e interpretación.
@@ -49,7 +47,8 @@ La función principal y punto de entrada de la aplicación es `app_simple.py`.
 ---
 
 ## 🛠️ Estructura Principal
-- `app_simple.py`: Interfaz de usuario y orquestador principal.
-- `CleanData.py`: Clase `Transformar_Df` encargada de toda la lógica de limpieza y transformación.
-- `MODELS.py`: Funciones para el entrenamiento y evaluación de modelos de ML.
-- `CargarDatos.py`: Lógica para el análisis inicial y generación de reportes EDA.
+- `app_simple.py`: Interfaz de usuario (Estética Aetheris AI) y orquestador principal con navegación lateral interactiva.
+- `CODIGO/CleanData.py`: Clase `Transformar_Df` encargada de toda la lógica de limpieza y transformación.
+- `CODIGO/MODELS.py`: Arquitectura de modelos predictivos (Regresión Lineal, Regresión Logística, Árboles de Decisión, Random Forest, Redes Neuronales MLP, KNN, Clustering, Credit Scoring).
+- `CODIGO/CargarDatos.py`: Lógica para el análisis inicial y generación de reportes EDA.
+- `CODIGO/Funcionalidades.py`: Funciones auxiliares para comunicarse con la API de Gemini (diseño de estrategias e interpretación de métricas).

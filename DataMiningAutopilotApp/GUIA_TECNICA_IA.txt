@@ -66,6 +66,7 @@ Este documento define el formato exacto en que la IA debe generar la configuraci
 - Los outliers se analizan automaticamente con IQR antes de imputar nulos.
 - Las columnas datetime se transformaran automaticamente en variables numericas: year, month, day y dayofweek.
 - Al final del preprocesamiento, todas las variables de entrada deben ser numericas.
+-en reglas_dict usar todas las columnas del dataset para evitar errores al ejecutar el pipeline de preprocesamiento, recomendar un tratamiento para cada columna
 
 5. EJEMPLO DE CONFIGURACION VALIDA
 

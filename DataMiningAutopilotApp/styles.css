@@ -1,0 +1,209 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
+
+.stApp {
+    background-color: #0a0e18;
+    background-image: radial-gradient(circle at 2px 2px, rgba(31, 41, 55, 0.5) 1px, transparent 0);
+    background-size: 40px 40px;
+    color: #dfe2f1;
+    font-family: 'Inter', sans-serif;
+}
+
+/* Glass Panels and Headers */
+h1,
+h2,
+h3,
+h4 {
+    font-family: 'Sora', sans-serif;
+    background: rgba(23, 27, 38, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(49, 53, 64, 0.5);
+    border-radius: 12px;
+    padding: 15px 20px;
+    padding-left: 20px !important;
+    margin-top: 20px !important;
+    margin-bottom: 20px !important;
+}
+
+h1 {
+    color: #4edea3 !important;
+    font-weight: 800 !important;
+    letter-spacing: -1px;
+    font-size: 2.8rem !important;
+}
+
+h2 {
+    font-size: 2.2rem !important;
+    color: #dfe2f1 !important;
+}
+
+h3 {
+    font-size: 1.8rem !important;
+    color: #4edea3 !important;
+    font-weight: 600 !important;
+}
+
+/* Base shape for ALL buttons */
+.stButton>button {
+    border-radius: 12px !important;
+    font-weight: 700 !important;
+    font-family: 'Sora', sans-serif !important;
+    padding: 1rem 1.5rem !important;
+    font-size: 1rem !important;
+    transition: all 0.3s ease !important;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+}
+
+/* Primary buttons (Active Nav Tab, Reiniciar) */
+.stButton>button[data-testid="baseButton-primary"] {
+    background: #4edea3 !important;
+    color: #003824 !important;
+    border: none !important;
+    box-shadow: 0 0 20px rgba(78, 222, 163, 0.15) !important;
+}
+
+.stButton>button[data-testid="baseButton-primary"]:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 0 30px rgba(78, 222, 163, 0.3) !important;
+    filter: brightness(1.1);
+}
+
+/* Secondary buttons (Inactive Nav Tabs) */
+.stButton>button[data-testid="baseButton-secondary"] {
+    background-color: #1f2533 !important; /* Ligeramente más claro que el sidebar (#171b26) */
+    color: #dfe2f1 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    box-shadow: none !important;
+}
+
+.stButton>button[data-testid="baseButton-secondary"]:hover {
+    background-color: #2a3245 !important; /* Aún más claro al pasar el mouse */
+    border-color: rgba(78, 222, 163, 0.4) !important;
+    color: #4edea3 !important; /* Brillo teal tenue en el texto al hacer hover */
+    transform: translateY(-2px) !important;
+}
+
+/* Base text */
+.stMarkdown p,
+.stMarkdown li,
+.stTable,
+.stTextArea textarea,
+.stMarkdown span,
+.stMarkdown div {
+    font-size: 1.15rem !important;
+    line-height: 1.6 !important;
+    color: #dfe2f1;
+}
+
+[data-testid="stText"] {
+    font-size: 1.15rem !important;
+    line-height: 1.4 !important;
+    color: #bbcabf;
+}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background-color: #171b26 !important;
+    border-right: 1px solid rgba(49, 53, 64, 0.3);
+}
+
+/* Enviar el botón del Sidebar al fondo usando Flexbox */
+[data-testid="stSidebarUserContent"] {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+[data-testid="stSidebarUserContent"]>div[data-testid="stVerticalBlock"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+[data-testid="stSidebarUserContent"]>div[data-testid="stVerticalBlock"]>div:last-child {
+    margin-top: auto;
+    margin-bottom: 20vh;
+    margin-right: 0 auto;
+}
+
+/* File Uploader */
+[data-testid="stFileUploader"] {
+    max-width: 60%;
+    margin: 0 auto;
+    background: rgba(17, 24, 39, 0.8);
+    backdrop-filter: blur(12px);
+    border-radius: 20px;
+    border: 1px solid rgba(31, 41, 55, 0.5);
+    padding: 20px;
+}
+
+[data-testid="stFileUploaderDropzone"] {
+    min-height: 250px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed rgba(78, 222, 163, 0.3) !important;
+    background: rgba(78, 222, 163, 0.02) !important;
+    border-radius: 15px;
+    transition: all 0.3s ease;
+}
+
+[data-testid="stFileUploaderDropzone"]:hover {
+    border-color: #4edea3 !important;
+    background: rgba(78, 222, 163, 0.05) !important;
+    box-shadow: 0 0 20px rgba(78, 222, 163, 0.15);
+}
+
+[data-testid="stFileUploaderDropzone"] div,
+[data-testid="stFileUploaderDropzone"] span {
+    font-size: 1.25rem !important;
+    color: #bbcabf !important;
+}
+
+[data-testid="stFileUploader"] label p {
+    font-size: 1.8rem !important;
+    font-weight: 800 !important;
+    color: #4edea3 !important;
+    text-align: center;
+    font-family: 'Sora', sans-serif;
+}
+
+/* Tables */
+.stTable {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(49, 53, 64, 0.5);
+    background: rgba(23, 27, 38, 0.7);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+thead tr th {
+    background-color: #0f131d !important;
+    color: #4edea3 !important;
+    font-weight: bold;
+    border-bottom: 1px solid rgba(49, 53, 64, 0.5);
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 10px;
+    background-color: transparent;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background-color: #171b26;
+    border-radius: 10px 10px 0 0;
+    padding: 10px 20px;
+    color: #bbcabf;
+    font-family: 'Sora', sans-serif;
+    font-weight: 600;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: #4edea3 !important;
+    color: #003824 !important;
+}

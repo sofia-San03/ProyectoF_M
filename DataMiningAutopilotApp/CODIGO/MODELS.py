@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from scipy.cluster.hierarchy import dendrogram, linkage
 import warnings
 from uuid import uuid4
+import os
 
 from sklearn.compose import TransformedTargetRegressor
 
@@ -36,7 +37,6 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     X_train = X_train[columnas_validas]
     X_test = X_test[columnas_validas]
 
-    # 2. Selección de Variables (Filtrando por significancia estadística)
     kb = SelectKBest(k="all", score_func=f_regression)
     kb.fit(X_train, y_train)
     
@@ -131,9 +131,15 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     return json_resultado, mejor_modelo, columnas_significativas
 
 def _ruta_con_id_unico(filename):
+    os.makedirs("MODELOS", exist_ok=True)
     base, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
     sufijo = uuid4().hex[:8]
-    return f"{base}_{sufijo}.{ext}" if ext else f"{base}_{sufijo}"
+    return f"MODELOS/{base}_{sufijo}.{ext}" if ext else f"MODELOS/{base}_{sufijo}"
+
+def _obtener_image_prefix(model_path):
+    os.makedirs("Resultados", exist_ok=True)
+    base_name = os.path.basename(model_path).replace(".pkl", "")
+    return os.path.join("Resultados", base_name)
 
 def _guardar_feature_importance(modelo, columnas, image_prefix):
     if not hasattr(modelo, "feature_importances_"):
@@ -302,7 +308,7 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     y_pred = mejor_modelo.predict(X_test_sel)
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     class_names = [str(v) for v in unique_values] if es_clf else None
     tree_path = _guardar_arbol_visual(mejor_modelo, columnas_significativas, image_prefix, class_names=class_names)
     importance_path = _guardar_feature_importance(mejor_modelo, columnas_significativas, image_prefix)
@@ -480,7 +486,7 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     auc = roc_auc_score(y_test, y_prob)
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     roc_path = _guardar_roc(y_test, y_prob, image_prefix)
     confusion_path, matriz = _guardar_matriz_confusion(y_test, y_pred, unique_values, image_prefix)
     coeficientes_path = _guardar_coeficientes_logisticos(mejor_modelo, columnas_significativas, image_prefix)
@@ -777,7 +783,7 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     )[0]
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
     scatter_path, elbow_path, dendrogram_path = _guardar_visualizaciones_clustering(
         X_values,
         mejor["labels"],
@@ -921,7 +927,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     y_array = np.asarray(y)
     es_clf = _es_clasificacion(y_array)
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
         _, class_counts = np.unique(y_array, return_counts=True)
@@ -1131,7 +1137,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     y_array = np.asarray(y)
     es_clf = _es_clasificacion(y_array)
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
         _, class_counts = np.unique(y_array, return_counts=True)
@@ -1434,7 +1440,7 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     )
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     roc_path = _guardar_roc_credit(y_test_binary, y_prob, image_prefix)
     score_distribution_path = _guardar_score_distribution(scores, risk_segments, image_prefix)
     risk_segments_path = _guardar_segmentos_riesgo(risk_segments, image_prefix)
