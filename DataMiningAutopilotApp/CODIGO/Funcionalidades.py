@@ -264,10 +264,12 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         Valores nulos: {json.dumps(nulls)}
 
         TAREA INICIAL:
-        1. Presenta un plan inicial de ciencia de datos. Explica la estrategia de negocio y por que elegiste el modelo.
-        2. Incluye recomendaciones sobre nulos, outliers, inconsistencias, distribuciones y variables relevantes.
-        3. NUNCA menciones nombres de funciones tecnicas internas de Python.
-        4. Al final incluye un bloque JSON valido con: col_target, tipo_modelo, reglas_dict y EsPCA.
+        1. Presenta un plan inicial de ciencia de datos con un enfoque 100% estratégico.
+        2. Usa títulos (##) que hablen de NEGOCIO (ej. 'Impacto en la Rentabilidad', 'Visión General del Proyecto') en lugar de términos técnicos.
+        3. Explica la estrategia de datos y por qué elegiste el modelo sin usar jerga compleja.
+        4. Incluye recomendaciones sobre la calidad de la información y variables relevantes.
+        5. NUNCA menciones nombres de funciones técnicas internas de Python ni palabras como 'Pipeline', 'JSON' o 'Preprocesamiento' en tus títulos o explicaciones.
+        6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
         """
     else:
         prompt = f"""

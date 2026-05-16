@@ -60,12 +60,11 @@ st.title("  Data mining Autopilot ")
 st.text("Automatización del preprocesamiento de datos y entrenamiento de modelos de machine learning")
 
 # Navegación Lateral (Sidebar)
-if st.session_state.phase == "CARGA":
-    opciones_nav = ["Carga de Datos"]
-else:
-    opciones_nav = ["Propuesta"]
-    if st.session_state.results is not None:
-        opciones_nav.append("Resultados y Predicción")
+opciones_nav = ["Carga de Datos"]
+if st.session_state.df is not None:
+    opciones_nav.append("Propuesta")
+if st.session_state.results is not None:
+    opciones_nav.append("Resultados y Predicción")
 
 map_phase_to_nav = {
     "CARGA": "Carga de Datos",
@@ -78,9 +77,6 @@ map_nav_to_phase = {
     "Propuesta": "PROPUESTA",
     "Resultados y Predicción": "RESULTADOS"
 }
-
-if map_phase_to_nav.get(st.session_state.phase, "Carga de Datos") not in opciones_nav:
-    st.session_state.phase = "CARGA"
 
 with st.sidebar:
     st.markdown("""
@@ -162,9 +158,13 @@ elif st.session_state.phase == "PROPUESTA":
         with chat_container:
             for msg in st.session_state.messages_propuesta:
                 with st.chat_message(msg["role"]):
+                    # Limpieza profunda: eliminamos el bloque JSON y cualquier rastro técnico
                     content_to_show = re.sub(r"```json.*?```", "", msg["content"], flags=re.DOTALL)
-                    # Ocultar títulos relacionados a la configuración JSON
-                    content_to_show = re.sub(r"(?i)#+.*?Configuraci[oó]n.*?(?:JSON|Preprocesamiento).*?\n?", "", content_to_show)
+                    # Ocultar separadores de Markdown y títulos técnicos
+                    content_to_show = re.sub(r"(?i)-{3,}", "", content_to_show) # Elimina líneas ---
+                    content_to_show = re.sub(r"(?i)#+.*?Configuraci[oó]n.*?(?:JSON|Preprocesamiento|T[eé]cnica).*?\n?", "", content_to_show)
+                    content_to_show = re.sub(r"(?i)#+.*?Pipeline.*?\n?", "", content_to_show)
+                    
                     content_to_show = content_to_show.strip()
                     if content_to_show:
                         st.markdown(content_to_show)
@@ -308,7 +308,6 @@ elif st.session_state.phase == "EJECUCION":
 
 elif st.session_state.phase == "RESULTADOS":
     res = st.session_state.results
-    st.balloons()
 
     tipo_modelo = res.get("tipo_modelo", "Regresion_lineal")
     es_clustering_resultado = es_modelo_clustering(tipo_modelo)

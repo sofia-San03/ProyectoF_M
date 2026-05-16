@@ -317,6 +317,9 @@ class Transformar_Df:
                 if es_texto_bool:
                     self.Limpiar_solo_cadenas(col, lematizar=regla.get('Lematizar', False))
                 
+                if col not in self.df.columns:
+                    continue
+                
                 es_dummificable = self.SePuedeCategorizar(col, max_categorias=regla.get('MaxDummies', 20))
                 
                 if regla.get('TargetEncoding', False):
