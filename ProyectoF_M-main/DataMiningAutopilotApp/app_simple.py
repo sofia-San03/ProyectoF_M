@@ -1,5 +1,9 @@
-import json
 import os
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "credenciales.json"
+)
+
+import json
 import re
 from io import StringIO
 
