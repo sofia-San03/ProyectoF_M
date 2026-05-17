@@ -121,6 +121,114 @@ def get_storage_client():
     credentials, project = google.auth.default()
     return storage.Client(credentials=credentials, project=PROJECT)
 
+def _normalizar_clave_metrica(clave):
+    return str(clave).lower().replace("_", "").replace("-", "").replace(" ", "")
+
+def _obtener_metrica(metricas, nombres):
+    if not isinstance(metricas, dict):
+        return None
+    objetivo = {_normalizar_clave_metrica(n) for n in nombres}
+    for clave, valor in metricas.items():
+        if _normalizar_clave_metrica(clave) in objetivo:
+            return valor
+    return None
+
+def _formatear_metrica(valor):
+    if valor is None:
+        return "N/D"
+    if isinstance(valor, (int, np.integer)):
+        return f"{int(valor):,}"
+    if isinstance(valor, (float, np.floating)):
+        return f"{float(valor):,.4f}"
+    return str(valor)
+
+def _tipo_resultado_dashboard(metricas, es_clustering):
+    tipo = str(metricas.get("tipo_problema", "")).lower() if isinstance(metricas, dict) else ""
+    if es_clustering:
+        return "clustering"
+    if "regresion" in tipo or "regression" in tipo:
+        return "regresion"
+    if "forecast" in tipo or "sarima" in tipo:
+        return "forecasting"
+    return "clasificacion"
+
+def _metricas_dashboard(metricas, es_clustering):
+    metricas_precision = metricas.get("metricas_precision", {}) if isinstance(metricas, dict) else {}
+    tipo = _tipo_resultado_dashboard(metricas, es_clustering)
+
+    if tipo == "clustering":
+        return [
+            ("Silhouette Score", _obtener_metrica(metricas_precision, ["Silhouette Score", "silhouette"])),
+            ("Davies Bouldin", _obtener_metrica(metricas_precision, ["Davies-Bouldin Index", "Davies Bouldin"])),
+            ("Numero de clusters", metricas.get("mejor_numero_clusters") or metricas.get("n_clusters")),
+        ]
+    if tipo == "regresion":
+        return [
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+            ("R²", _obtener_metrica(metricas_precision, ["R2", "R²"])),
+        ]
+    if tipo == "forecasting":
+        return [
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MSE", _obtener_metrica(metricas_precision, ["MSE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+        ]
+    return [
+        ("Accuracy", _obtener_metrica(metricas_precision, ["Accuracy"])),
+        ("Precision", _obtener_metrica(metricas_precision, ["Precision"])),
+        ("Recall", _obtener_metrica(metricas_precision, ["Recall"])),
+        ("F1 Score", _obtener_metrica(metricas_precision, ["F1-Score", "F1", "F1 Score"])),
+        ("ROC-AUC", _obtener_metrica(metricas_precision, ["ROC-AUC", "ROC AUC"])),
+        ("PR-AUC", _obtener_metrica(metricas_precision, ["PR-AUC", "PR AUC"])),
+    ]
+
+def _contar_logs(logs, patrones):
+    total = 0
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        if any(p in accion for p in patrones):
+            total += 1
+    return total
+
+def _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales):
+    eliminadas = set(columnas_originales) - set(columnas_finales)
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        col = log.get("columna")
+        if col and col != "__dataset__" and ("eliminacion_columna" in accion or "borrada" in accion):
+            eliminadas.add(col)
+    return sorted(eliminadas)
+
+def _resumen_tecnico_pipeline(res, cleaner, df_original):
+    logs = getattr(cleaner, "logs_limpieza", []) if cleaner is not None else []
+    columnas_originales = list(df_original.columns) if df_original is not None else []
+    columnas_finales = list(getattr(cleaner, "df", pd.DataFrame()).columns) if cleaner is not None else []
+    columnas_usadas = res.get("cols", [])
+    eliminadas = _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales + [res.get("target")])
+
+    return {
+        "columnas_originales": len(columnas_originales),
+        "columnas_usadas": len(columnas_usadas),
+        "columnas_eliminadas": eliminadas,
+        "nulos_tratados": _contar_logs(logs, ["imputacion", "eliminacion_filas_nulas"]),
+        "outliers_corregidos": _contar_logs(logs, ["outliers_recortados"]),
+        "categoricas_codificadas": _contar_logs(logs, ["dummies", "target_encoding", "ordinal_encoding", "woe"]),
+        "tiempo_total": res.get("tiempo_total_ejecucion", "N/D"),
+        "logs": logs,
+    }
+
+def _render_metricas_clave(metricas_filtradas):
+    visibles = [(nombre, valor) for nombre, valor in metricas_filtradas if valor is not None]
+    if not visibles:
+        return
+    for inicio in range(0, len(visibles), 4):
+        cols_metricas = st.columns(min(4, len(visibles) - inicio))
+        for col_ui, (nombre, valor) in zip(cols_metricas, visibles[inicio:inicio + 4]):
+            col_ui.metric(nombre, _formatear_metrica(valor))
+
 if "phase" not in st.session_state:
     st.session_state.phase = "CARGA"
 if "df" not in st.session_state:
@@ -151,6 +259,8 @@ if "last_uploaded_file" not in st.session_state:
     st.session_state.last_uploaded_file = None
 if "last_uploaded_dict" not in st.session_state:
     st.session_state.last_uploaded_dict = None
+if "proposal_update_notice" not in st.session_state:
+    st.session_state.proposal_update_notice = False
 
 
 st.title("  Data mining Autopilot ")
@@ -279,6 +389,7 @@ if st.session_state.phase == "CARGA":
                 st.session_state.cleaner = None
                 st.session_state.messages_propuesta = []
                 st.session_state.messages_resultados = []
+                st.session_state.proposal_update_notice = False
                 st.session_state.chat_session = iniciar_chat()
                 st.session_state.chat_resultados_session = iniciar_chat()
 
@@ -373,6 +484,8 @@ elif st.session_state.phase == "PROPUESTA":
                     diccionario_datos=st.session_state.data_dict_content
                 )
                 st.session_state.messages_propuesta.append({"role": "assistant", "content": response})
+                if re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL):
+                    st.session_state.proposal_update_notice = True
             st.rerun()
 
         st.markdown("---")
@@ -422,28 +535,53 @@ elif st.session_state.phase == "PROPUESTA":
             puede_ejecutar = es_valido and MODELOS_DISPONIBLES[modelo_seleccionado]["implementado"]
 
             st.markdown("#### Tratamiento de nulos y columnas")
+            if st.session_state.get("proposal_update_notice"):
+                st.success("Las propuestas de limpieza fueron actualizadas correctamente.")
+
             if reglas_detectadas:
                 table_data = []
                 for col, params in reglas_detectadas.items():
                     params_validos = isinstance(params, dict)
                     metodo_usado = params.get("metodo", "AUTO") if params_validos else "AUTO"
-                    
-                    if str(metodo_usado).lower() in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
-                        tratamiento_str = "Imputación"
-                    elif str(metodo_usado).lower() == "drop-column":
+                    metodo_normalizado = str(metodo_usado).lower()
+
+                    if metodo_normalizado in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
+                        tratamiento_str = "Imputacion"
+                    elif metodo_normalizado == "drop-column":
                         tratamiento_str = "Eliminar Columna"
                     else:
-                        tratamiento_str = "Imputación"
-                    
+                        tratamiento_str = "Imputacion"
+
+                    if col in st.session_state.df.columns:
+                        if metodo_normalizado == "drop-column":
+                            conteo_datos = f"{len(st.session_state.df)} filas"
+                        elif params_validos and (
+                            params.get("Dummies") or params.get("TargetEncoding") or params.get("Ordinal") or params.get("WOE")
+                        ):
+                            conteo_datos = f"{st.session_state.df[col].nunique(dropna=True)} valores unicos"
+                        else:
+                            conteo_datos = f"{int(st.session_state.df[col].isna().sum())} nulos"
+                    else:
+                        conteo_datos = "Columna no encontrada"
+
                     table_data.append(
                         {
                             "Columna": col,
                             "Tratamiento": tratamiento_str,
-                            "Estado": "✅" if params_validos else "❌",
+                            "Estado": "Listo" if params_validos else "Revisar",
+                            "Conteo/Datos": conteo_datos,
                             "Dummies": "Si" if params_validos and params.get("Dummies") else "No",
                         }
                     )
                 st.table(pd.DataFrame(table_data))
+                with st.expander("Que significa esta tabla"):
+                    st.markdown(
+                        """
+                        - **Tratamiento:** accion que se aplicara a la columna, por ejemplo rellenar datos faltantes, eliminar una columna o transformar categorias.
+                        - **Estado:** indica si la propuesta esta lista para ejecutarse o si necesita revision porque la configuracion no se pudo interpretar bien.
+                        - **Conteo/Datos:** muestra cuantos registros o valores se veran afectados; por ejemplo, nulos por rellenar, filas asociadas a una eliminacion o valores unicos que se transformaran.
+                        """
+                    )
         except Exception as e:
             conf_data = {}
             puede_ejecutar = False
@@ -477,6 +615,7 @@ elif st.session_state.phase == "EJECUCION":
     conf = st.session_state.config_pipeline
     try:
         import os, shutil
+        tiempo_inicio_pipeline = time.time()
         if os.path.exists("Resultados"):
             shutil.rmtree("Resultados")
         if os.path.exists("MODELOS"):
@@ -557,7 +696,8 @@ elif st.session_state.phase == "EJECUCION":
                 "target": target,
                 "reglas": reglas,
                 "es_pca": es_pca,
-                "perfiles": perfiles
+                "perfiles": perfiles,
+                "tiempo_total_ejecucion": round(time.time() - tiempo_inicio_pipeline, 2)
             }
 
         st.session_state.phase = "RESULTADOS"
@@ -703,13 +843,26 @@ elif st.session_state.phase == "RESULTADOS":
                 st.session_state.messages_resultados.append({"role": "assistant", "content": explicacion})
                 st.rerun()
 
+        cleaner_actual = st.session_state.cleaner
+        resumen_pipeline = _resumen_tecnico_pipeline(res, cleaner_actual, st.session_state.df)
+        metricas_clave_dashboard = _metricas_dashboard(metricas_interfaz, es_clustering_resultado)
+        columnas_eliminadas = resumen_pipeline["columnas_eliminadas"]
+
+        _render_metricas_clave(metricas_clave_dashboard)
+
+        resumen_cols = st.columns(5)
+        resumen_cols[0].metric("Columnas usadas", _formatear_metrica(resumen_pipeline["columnas_usadas"]))
+        resumen_cols[1].metric("Columnas eliminadas", _formatear_metrica(len(columnas_eliminadas)))
+        resumen_cols[2].metric("Outliers tratados", _formatear_metrica(resumen_pipeline["outliers_corregidos"]))
+        resumen_cols[3].metric("Nulos tratados", _formatear_metrica(resumen_pipeline["nulos_tratados"]))
+        if resumen_pipeline["tiempo_total"] != "N/D":
+            resumen_cols[4].metric("Tiempo total", f"{resumen_pipeline['tiempo_total']} s")
 
         if es_clustering_resultado:
             metricas_cluster = metricas_interfaz
             st.markdown("#### Resultados de Clustering")
             st.write(f"**Algoritmo seleccionado:** {metricas_cluster.get('modelo_seleccionado')}")
             st.write(f"**Mejor numero de clusters:** {metricas_cluster.get('mejor_numero_clusters')}")
-            st.json(metricas_cluster.get("metricas_precision", {}))
 
             visualizaciones = metricas_cluster.get("visualizaciones", {})
             col_img1, col_img2 = st.columns(2)
@@ -729,7 +882,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_red = metricas_interfaz
                 st.markdown("#### Resultados de Redes Neuronales")
                 st.write(f"**Tipo de problema:** {metricas_red.get('tipo_problema')}")
-                st.json(metricas_red.get("metricas_precision", {}))
                 visualizaciones = metricas_red.get("visualizaciones", {})
                 col_nn1, col_nn2 = st.columns(2)
                 with col_nn1:
@@ -747,7 +899,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_knn = metricas_interfaz
                 st.markdown("#### Resultados de KNN")
                 st.write(f"**Tipo de problema:** {metricas_knn.get('tipo_problema')}")
-                st.json(metricas_knn.get("metricas_precision", {}))
                 visualizaciones = metricas_knn.get("visualizaciones", {})
                 col_knn1, col_knn2 = st.columns(2)
                 with col_knn1:
@@ -764,7 +915,6 @@ elif st.session_state.phase == "RESULTADOS":
                 st.markdown("#### Resultados de Arboles")
                 st.write(f"**Modelo seleccionado:** {metricas_arbol.get('modelo_seleccionado')}")
                 st.write(f"**Tipo de problema:** {metricas_arbol.get('tipo_problema')}")
-                st.json(metricas_arbol.get("metricas_precision", {}))
                 visualizaciones = metricas_arbol.get("visualizaciones", {})
                 col_tree1, col_tree2 = st.columns(2)
                 with col_tree1:
@@ -780,7 +930,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_log = metricas_interfaz
                 st.markdown("#### Resultados de Regresion Logistica")
                 st.write(f"**Tipo de problema:** {metricas_log.get('tipo_problema')}")
-                st.json(metricas_log.get("metricas_precision", {}))
                 visualizaciones = metricas_log.get("visualizaciones", {})
                 col_log1, col_log2 = st.columns(2)
                 with col_log1:
@@ -796,7 +945,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_credit = metricas_interfaz
                 st.markdown("#### Resultados de Credit Scoring")
                 st.write(f"**Tipo de problema:** {metricas_credit.get('tipo_problema')}")
-                st.json(metricas_credit.get("metricas_precision", {}))
                 visualizaciones = metricas_credit.get("visualizaciones", {})
                 col_credit1, col_credit2 = st.columns(2)
                 with col_credit1:
