@@ -252,7 +252,7 @@ def es_modelo_regresion_logistica(tipo_modelo):
 def es_modelo_credit_scoring(tipo_modelo):
     return normalizar_modelo(tipo_modelo) == "Credit_scoring"
 
-def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
+def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario_datos=None):
     dtypes = df.dtypes.apply(lambda x: str(x)).to_dict()
     nulls = df.isnull().sum().to_dict()
 
@@ -263,6 +263,12 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         sample_data = "\nMUESTRA DE DATOS CATEGÓRICOS (Primeras 3 filas):\n"
         sample_data += df[cat_cols].head(3).to_string()
 
+    dict_context = ""
+    dict_instruction = ""
+    if diccionario_datos:
+        dict_context = f"\n========================================\nDICCIONARIO DE DATOS PROPORCIONADO POR EL USUARIO (Información de negocio extra):\n{diccionario_datos}\n========================================\n"
+        dict_instruction = '\nOBLIGATORIO: Como has recibido un diccionario de datos del usuario, es mandatorio que comiences tu respuesta de análisis (o de confirmación de ajustes) con la frase exacta: "He recibido tu diccionario de datos, donde..." y continúes resumiendo brevemente lo que comprendes de él y cómo influye de manera provechosa en tu propuesta estratégica.\n'
+
     if is_initial:
         prompt = f"""
         Eres un Consultor de Negocio y Estratega de Datos.
@@ -270,13 +276,15 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         Metadatos: {json.dumps(dtypes)}
         Valores nulos: {json.dumps(nulls)}
         {sample_data}
+        {dict_context}
 
         TAREA INICIAL:
-        1. Presenta un plan inicial de ciencia de datos con un enfoque 100% estratégico.
+        1. Presenta un plan inicial de ciencia de datos con un enfoque 100% estratégico. Utiliza el diccionario de datos como información extra del negocio para mayor conocimiento de las variables.
         2. Usa títulos (##) que hablen de NEGOCIO (ej. 'Impacto en la Rentabilidad', 'Visión General del Proyecto') en lugar de términos técnicos.
         3. Explica la estrategia de datos y por qué elegiste el modelo sin usar jerga compleja.
         4. Incluye recomendaciones sobre la calidad de la información y variables relevantes.
         5. NUNCA menciones nombres de funciones técnicas internas de Python ni palabras como 'Pipeline', 'JSON' o 'Preprocesamiento' en tus títulos o explicaciones.
+        {dict_instruction}
         
         RESTRICCIONES CRÍTICAS PARA EL JSON (OBLIGATORIO):
         - Columnas de Nombres, correos, ids, telefono, direccion (name, nombre, apellido, email, phone, address, etc.): DEBES usar "metodo": "drop-column". Está PROHIBIDO usar TargetEncoding o Dummies en ellas, a no ser que el usuario lo pida explícitamente.
@@ -289,6 +297,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         prompt = f"""
         Eres un Consultor de Negocio y Estratega de Datos.
         INSTRUCCIONES DEL USUARIO: "{feedback}"
+        {dict_context}
         
         EVALUACIÓN DE INTENCIÓN:
         Analiza si el usuario te está pidiendo MODIFICAR el plan de tratamiento/modelo o si solo está haciendo una PREGUNTA/DUDA.
@@ -296,11 +305,13 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False):
         SI PIDE MODIFICAR EL PLAN:
         1. Empieza diciendo: 'Entendido, he procesado tus ajustes...'
         2. Explica los cambios estratégicos.
+        {dict_instruction}
         3. OBLIGATORIO: Al final incluye un nuevo bloque JSON válido con la configuración técnica actualizada (col_target, tipo_modelo, reglas_dict y EsPCA).
         
         SI SOLO HACE UNA PREGUNTA (o pide sugerencias/aclaraciones sin pedir cambios al plan):
         1. Responde a su duda detalladamente enfocándote en negocio, datos y algoritmos.
         2. NO hables de código.
+        {dict_instruction}
         3. MUY IMPORTANTE: NO incluyas ningún bloque JSON al final. De esta forma el sistema sabrá que no hay cambios técnicos.
         """
 

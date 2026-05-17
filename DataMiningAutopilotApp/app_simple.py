@@ -56,6 +56,14 @@ if "chat_resultados_session" not in st.session_state:
     st.session_state.chat_resultados_session = iniciar_chat()
 if "messages_resultados" not in st.session_state:
     st.session_state.messages_resultados = []
+if "data_dict_content" not in st.session_state:
+    st.session_state.data_dict_content = None
+if "data_dict_name" not in st.session_state:
+    st.session_state.data_dict_name = None
+if "last_uploaded_file" not in st.session_state:
+    st.session_state.last_uploaded_file = None
+if "last_uploaded_dict" not in st.session_state:
+    st.session_state.last_uploaded_dict = None
 
 
 st.title("  Data mining Autopilot ")
@@ -112,36 +120,101 @@ if st.session_state.phase == "CARGA":
     st.markdown("<h2 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#bbcabf'>Sube tus datasets para comenzar el procesamiento neuronal.</p><br>", unsafe_allow_html=True)
     
-    uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx", "json"])
-    if uploaded_file:
-        if st.session_state.df is not None:
-            # Nuevo proyecto: Limpieza de variables para iniciar desde cero sin perder el file cargado
-            st.session_state.proposal = None
-            st.session_state.config_pipeline = None
-            st.session_state.results = None
-            st.session_state.cleaner = None
-            st.session_state.messages_propuesta = []
-            st.session_state.messages_resultados = []
-            st.session_state.chat_session = iniciar_chat()
-            st.session_state.chat_resultados_session = iniciar_chat()
-            
-        with st.spinner("Cargando y procesando datos..."):
-            if uploaded_file.name.endswith(".csv"):
-                try:
-                    st.session_state.df = pd.read_csv(uploaded_file, encoding="utf-8")
-                except UnicodeDecodeError:
-                    uploaded_file.seek(0)
-                    st.session_state.df = pd.read_csv(uploaded_file, encoding="latin1")
-            elif uploaded_file.name.endswith(".json"):
-                try:
-                    st.session_state.df = pd.read_json(uploaded_file)
-                except ValueError:
-                    uploaded_file.seek(0)
-                    st.session_state.df = pd.read_json(uploaded_file, lines=True)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx", "json"])
+        if uploaded_file:
+            file_key = f"df_loaded_{uploaded_file.name}_{uploaded_file.size}"
+            if st.session_state.get("last_uploaded_file") != file_key:
+                st.session_state.proposal = None
+                st.session_state.config_pipeline = None
+                st.session_state.results = None
+                st.session_state.cleaner = None
+                st.session_state.messages_propuesta = []
+                st.session_state.messages_resultados = []
+                st.session_state.chat_session = iniciar_chat()
+                st.session_state.chat_resultados_session = iniciar_chat()
+                
+                with st.spinner("Cargando y procesando datos..."):
+                    try:
+                        if uploaded_file.name.endswith(".csv"):
+                            try:
+                                df_temp = pd.read_csv(uploaded_file, encoding="utf-8")
+                            except UnicodeDecodeError:
+                                uploaded_file.seek(0)
+                                df_temp = pd.read_csv(uploaded_file, encoding="latin1")
+                        elif uploaded_file.name.endswith(".json"):
+                            try:
+                                df_temp = pd.read_json(uploaded_file)
+                            except ValueError:
+                                uploaded_file.seek(0)
+                                df_temp = pd.read_json(uploaded_file, lines=True)
+                        else:
+                            df_temp = pd.read_excel(uploaded_file)
+                        st.session_state.df = df_temp
+                        st.session_state.last_uploaded_file = file_key
+                        st.success(f"✅ Dataset cargado con éxito: **{uploaded_file.name}**")
+                    except Exception as e:
+                        st.error(f"Error al procesar el archivo: {e}")
             else:
-                st.session_state.df = pd.read_excel(uploaded_file)
-            st.session_state.phase = "PROPUESTA"
-            st.rerun()
+                st.success(f"✅ Dataset activo: **{uploaded_file.name}** ({st.session_state.df.shape[0]} filas, {st.session_state.df.shape[1]} columnas)")
+        else:
+            st.session_state.df = None
+            st.session_state.last_uploaded_file = None
+
+    with col2:
+        uploaded_dict = st.file_uploader("Sube tus diccionarios", type=["csv", "xlsx", "json", "txt"], key="dict_uploader")
+        if uploaded_dict:
+            dict_key = f"dict_loaded_{uploaded_dict.name}_{uploaded_dict.size}"
+            if st.session_state.get("last_uploaded_dict") != dict_key:
+                with st.spinner("Procesando diccionario de datos..."):
+                    try:
+                        if uploaded_dict.name.endswith(".csv"):
+                            try:
+                                df_dict = pd.read_csv(uploaded_dict, encoding="utf-8")
+                            except UnicodeDecodeError:
+                                uploaded_dict.seek(0)
+                                df_dict = pd.read_csv(uploaded_dict, encoding="latin1")
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".xlsx"):
+                            df_dict = pd.read_excel(uploaded_dict)
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".json"):
+                            try:
+                                df_dict = pd.read_json(uploaded_dict)
+                            except ValueError:
+                                uploaded_dict.seek(0)
+                                df_dict = pd.read_json(uploaded_dict, lines=True)
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".txt"):
+                            st.session_state.data_dict_content = uploaded_dict.read().decode("utf-8", errors="ignore")
+                        
+                        st.session_state.data_dict_name = uploaded_dict.name
+                        st.session_state.last_uploaded_dict = dict_key
+                        st.success(f"✅ Diccionario de datos cargado con éxito: **{uploaded_dict.name}**")
+                    except Exception as e:
+                        st.error(f"Error al procesar el diccionario de datos: {e}")
+            else:
+                st.success(f"✅ Diccionario de datos activo: **{st.session_state.data_dict_name}**")
+            
+            if st.button("Eliminar Diccionario", use_container_width=True):
+                st.session_state.data_dict_content = None
+                st.session_state.data_dict_name = None
+                st.session_state.last_uploaded_dict = None
+                st.rerun()
+        else:
+            st.session_state.data_dict_content = None
+            st.session_state.data_dict_name = None
+            st.session_state.last_uploaded_dict = None
+
+    if st.session_state.df is not None:
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
+        with col_btn_center:
+            if st.button("🚀 Confirmar Datos", use_container_width=True, type="primary"):
+                st.session_state.phase = "PROPUESTA"
+                st.rerun()
 
 elif st.session_state.phase == "PROPUESTA":
     tab1, tab2 = st.tabs(["Estrategia de IA", "Reporte de Datos"])
@@ -149,7 +222,12 @@ elif st.session_state.phase == "PROPUESTA":
     with tab1:
         if not st.session_state.messages_propuesta:
             with st.spinner("El agente esta disenando la estrategia inicial..."):
-                initial_proposal = get_ia_proposal(st.session_state.chat_session, st.session_state.df, is_initial=True)
+                initial_proposal = get_ia_proposal(
+                    st.session_state.chat_session,
+                    st.session_state.df,
+                    is_initial=True,
+                    diccionario_datos=st.session_state.data_dict_content
+                )
                 st.session_state.messages_propuesta.append({"role": "assistant", "content": initial_proposal})
 
         json_str = "{}"
@@ -179,7 +257,12 @@ elif st.session_state.phase == "PROPUESTA":
             st.session_state.messages_propuesta.append({"role": "user", "content": user_input})
             with st.spinner("Procesando tu solicitud..."):
                 instruction = f"Usa este json como base para modificaciones si aplica: {json_str}. El usuario dice: {user_input}"
-                response = get_ia_proposal(st.session_state.chat_session, st.session_state.df, instruction)
+                response = get_ia_proposal(
+                    st.session_state.chat_session,
+                    st.session_state.df,
+                    feedback=instruction,
+                    diccionario_datos=st.session_state.data_dict_content
+                )
                 st.session_state.messages_propuesta.append({"role": "assistant", "content": response})
             st.rerun()
 
