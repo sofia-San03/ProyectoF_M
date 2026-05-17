@@ -18,8 +18,41 @@ import matplotlib.pyplot as plt
 from scipy.cluster.hierarchy import dendrogram, linkage
 import warnings
 from uuid import uuid4
+import os
+import matplotlib as mpl
+
+APP_COLORS = {
+    'primary': '#00F2FE',
+    'secondary': '#4FACFE',
+    'accent': '#7000FF',
+    'background': '#0E1117',
+    'text': '#E0E0E0',
+    'success': '#00C853',
+    'error': '#FF5252'
+}
+
+mpl.rcParams['text.color'] = APP_COLORS['text']
+mpl.rcParams['axes.labelcolor'] = APP_COLORS['text']
+mpl.rcParams['xtick.color'] = APP_COLORS['text']
+mpl.rcParams['ytick.color'] = APP_COLORS['text']
+mpl.rcParams['axes.edgecolor'] = '#444444'
+mpl.rcParams['axes.facecolor'] = APP_COLORS['background']
+mpl.rcParams['figure.facecolor'] = APP_COLORS['background']
+mpl.rcParams['grid.color'] = '#222222'
+mpl.rcParams['font.family'] = 'sans-serif'
 
 from sklearn.compose import TransformedTargetRegressor
+
+def _redondear_dict(d, precision=4):
+    """Redondea recursivamente todos los valores numéricos de un diccionario."""
+    if isinstance(d, dict):
+        return {k: _redondear_dict(v, precision) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [_redondear_dict(x, precision) for x in d]
+    elif isinstance(d, (float, np.float64, np.float32)):
+        return round(float(d), precision)
+    else:
+        return d
 
 def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lineal.pkl', seed=123, p_value_threshold=0.05):
     X = X.select_dtypes(include=[np.number]).copy()
@@ -36,7 +69,6 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     X_train = X_train[columnas_validas]
     X_test = X_test[columnas_validas]
 
-    # 2. Selección de Variables (Filtrando por significancia estadística)
     kb = SelectKBest(k="all", score_func=f_regression)
     kb.fit(X_train, y_train)
     
@@ -120,6 +152,7 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
         "ruta_modelo_guardado": model_path
     }
     
+    resultados = _redondear_dict(resultados)
     json_resultado = json.dumps(resultados, indent=4, ensure_ascii=False)
 
     paquete_modelo = {
@@ -131,9 +164,15 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     return json_resultado, mejor_modelo, columnas_significativas
 
 def _ruta_con_id_unico(filename):
+    os.makedirs("MODELOS", exist_ok=True)
     base, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
     sufijo = uuid4().hex[:8]
-    return f"{base}_{sufijo}.{ext}" if ext else f"{base}_{sufijo}"
+    return f"MODELOS/{base}_{sufijo}.{ext}" if ext else f"MODELOS/{base}_{sufijo}"
+
+def _obtener_image_prefix(model_path):
+    os.makedirs("Resultados", exist_ok=True)
+    base_name = os.path.basename(model_path).replace(".pkl", "")
+    return os.path.join("Resultados", base_name)
 
 def _guardar_feature_importance(modelo, columnas, image_prefix):
     if not hasattr(modelo, "feature_importances_"):
@@ -302,7 +341,7 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     y_pred = mejor_modelo.predict(X_test_sel)
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     class_names = [str(v) for v in unique_values] if es_clf else None
     tree_path = _guardar_arbol_visual(mejor_modelo, columnas_significativas, image_prefix, class_names=class_names)
     importance_path = _guardar_feature_importance(mejor_modelo, columnas_significativas, image_prefix)
@@ -387,6 +426,8 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
         "mejores_hiperparametros": grid_search.best_params_,
         "ruta_modelo_guardado": model_path
     })
+    
+    resultados = _redondear_dict(resultados)
 
     paquete_modelo = {
         "modelo": mejor_modelo,
@@ -480,7 +521,7 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     auc = roc_auc_score(y_test, y_prob)
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     roc_path = _guardar_roc(y_test, y_prob, image_prefix)
     confusion_path, matriz = _guardar_matriz_confusion(y_test, y_pred, unique_values, image_prefix)
     coeficientes_path = _guardar_coeficientes_logisticos(mejor_modelo, columnas_significativas, image_prefix)
@@ -519,6 +560,7 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
         "ruta_modelo_guardado": model_path
     }
     
+    resultados = _redondear_dict(resultados)
     json_resultado = json.dumps(resultados, indent=4, ensure_ascii=False)
 
     paquete_modelo = {
@@ -530,10 +572,11 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     return json_resultado, mejor_modelo, columnas_significativas
 
 class OptimizedClusterModel:
-    def __init__(self, algoritmo, estimator=None, centers=None):
+    def __init__(self, algoritmo, estimator=None, centers=None, labels=None):
         self.algoritmo = algoritmo
         self.estimator = estimator
         self.centers = centers
+        self.labels = labels
 
     def predict(self, X):
         if self.estimator is not None and hasattr(self.estimator, "predict"):
@@ -675,7 +718,7 @@ def _guardar_visualizaciones_clustering(X, labels, inercias_codo, k_values, imag
 
     return scatter_path, elbow_path, dendrogram_path
 
-def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_filename='modelo_clustering.pkl', seed=123):
+def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_filename='modelo_clustering.pkl', seed=123, n_clusters_fix=None):
     if X is None or X.empty:
         raise ValueError("Clustering requiere al menos una matriz X con columnas numéricas.")
 
@@ -688,9 +731,12 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     if n_samples < 3:
         raise ValueError("Clustering requiere al menos 3 registros.")
 
-    max_k = min(max_clusters, n_samples - 1)
-    min_k = min(min_clusters, max_k)
-    k_values = list(range(min_k, max_k + 1))
+    if n_clusters_fix is not None:
+        k_values = [int(n_clusters_fix)]
+    else:
+        max_k = min(max_clusters, n_samples - 1)
+        min_k = min(min_clusters, max_k)
+        k_values = list(range(min_k, max_k + 1))
 
     inercias_codo = []
     candidatos = []
@@ -777,7 +823,7 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     )[0]
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
     scatter_path, elbow_path, dendrogram_path = _guardar_visualizaciones_clustering(
         X_values,
         mejor["labels"],
@@ -800,7 +846,8 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     modelo_cluster = OptimizedClusterModel(
         algoritmo=mejor["algoritmo"],
         estimator=mejor["estimator"],
-        centers=mejor["centers"]
+        centers=mejor["centers"],
+        labels=mejor["labels"]
     )
 
     resultados = {
@@ -835,6 +882,7 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), modelo_cluster, X_numeric.columns.tolist()
 
 def _es_clasificacion(y):
@@ -921,7 +969,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     y_array = np.asarray(y)
     es_clf = _es_clasificacion(y_array)
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
         _, class_counts = np.unique(y_array, return_counts=True)
@@ -940,7 +988,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     cv_seguro = _cv_seguro(y_train, es_clf, cv_folds)
 
     if es_clf:
-        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, max_iter=500)
+        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, max_iter=1500)
         parametros = {
             "hidden_layer_sizes": [(32,), (64,), (32, 16)],
             "activation": ["relu", "tanh"],
@@ -949,7 +997,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
         }
         scoring = "accuracy"
     else:
-        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, max_iter=700)
+        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, max_iter=1500)
         parametros = {
             "hidden_layer_sizes": [(32,), (64,), (32, 16)],
             "activation": ["relu", "tanh"],
@@ -1071,6 +1119,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_validas.tolist()
 
 def _guardar_error_vs_k(k_values, errores_por_distancia, image_prefix):
@@ -1131,7 +1180,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     y_array = np.asarray(y)
     es_clf = _es_clasificacion(y_array)
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace('.pkl', '')
+    image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
         _, class_counts = np.unique(y_array, return_counts=True)
@@ -1284,6 +1333,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_validas.tolist()
 
 def KNN(*args, **kwargs):
@@ -1434,7 +1484,7 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     )
 
     model_path = _ruta_con_id_unico(model_filename)
-    image_prefix = model_path.replace(".pkl", "")
+    image_prefix = _obtener_image_prefix(model_path)
     roc_path = _guardar_roc_credit(y_test_binary, y_prob, image_prefix)
     score_distribution_path = _guardar_score_distribution(scores, risk_segments, image_prefix)
     risk_segments_path = _guardar_segmentos_riesgo(risk_segments, image_prefix)
@@ -1515,4 +1565,5 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     }
     joblib.dump(paquete_modelo, model_path)
 
+    resultados = _redondear_dict(resultados)
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_score

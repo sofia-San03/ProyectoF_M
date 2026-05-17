@@ -1,0 +1,4 @@
+edad: Edad del cliente en años.
+ingresos: Ingresos anuales del cliente en dólares.
+compras: Número total de compras realizadas en el último año.
+categoria: Segmento asignado por marketing (A, B, C).
