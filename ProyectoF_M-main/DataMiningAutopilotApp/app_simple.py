@@ -1,7 +1,9 @@
 import os
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "credenciales.json"
-)
+creds_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credenciales.json")
+if os.path.exists(creds_path):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+else:
+    print(f"No se encontró credenciales.json en: {creds_path}")
 
 import json
 import re
