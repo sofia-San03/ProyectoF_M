@@ -4,6 +4,13 @@ import google.generativeai as genai
 from google.api_core import exceptions
 import pandas as pd
 import streamlit as st
+import requests
+import time
+import numpy as np
+from google.cloud import storage, bigquery
+import google.auth
+import google.auth.transport.requests
+import google.oauth2.id_token
 
 from CODIGO.CleanData import Transformar_Df
 from CODIGO.MODELS import (
@@ -280,7 +287,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
 
     if is_initial:
         prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos.
+        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
         Guia tecnica interna: {guia_tecnica}
         Metadatos: {json.dumps(dtypes)}
         Valores nulos: {json.dumps(nulls)}
@@ -300,11 +307,15 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         - Columnas con separadores (genres, tags, keywords): Si ves "|" o muchos espacios en la muestra, DEBES usar "Lematizar": true. Prohibido usar Dummies aquí, a no ser que el usuario lo pida explícitamente.
         - Todas las columnas del dataset original deben aparecer en reglas_dict.
         
+        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
+        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
+        
         6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
         """
     else:
         prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos.
+        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
         INSTRUCCIONES DEL USUARIO: "{feedback}"
         {dict_context}
         
@@ -318,10 +329,14 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         3. OBLIGATORIO: Al final incluye un nuevo bloque JSON válido con la configuración técnica actualizada (col_target, tipo_modelo, reglas_dict y EsPCA).
         
         SI SOLO HACE UNA PREGUNTA (o pide sugerencias/aclaraciones sin pedir cambios al plan):
-        1. Responde a su duda detalladamente enfocándote en negocio, datos y algoritmos.
+        1. Responde a su duda detalladamente enfocándote en negocio, datos and algoritmos.
         2. NO hables de código.
         {dict_instruction}
         3. MUY IMPORTANTE: NO incluyas ningún bloque JSON al final. De esta forma el sistema sabrá que no hay cambios técnicos.
+        
+        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
+        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
         """
 
     print("\n" + "="*60)
@@ -402,15 +417,20 @@ def build_model_context_prompt(model_info: dict) -> str:
       2. Traduce métricas técnicas a lenguaje de negocio.
       3. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
       4. Sé conciso pero completo.
+      5. Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
     """
 
 def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
     interp_prompt = f"""
-    Actua como un Consultor de Data Science Senior
+    Actúa como un Consultor de Data Science Senior llamado Autopilot.
     Resultados: {json.dumps(metricas_interfaz)}
     Variables usadas: {cols}
     Tarea: {tarea}
-    Concluye con una recomendacion estrategica.
+    Concluye con una recomendación estratégica.
+    
+    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
+    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Interpretación de Resultados")
 
@@ -421,7 +441,7 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     perfiles_acotados = {k: v for k, v in perfiles.items()} # Evitar saturar contexto si es muy grande
     
     interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior y Estratega de Negocios.
+    Actúa como un Consultor de Data Science Senior y Estratega de Negocios llamado Autopilot.
     
     CONTEXTO TÉCNICO:
     Resultados del modelo: {json.dumps(metricas_interfaz)}
@@ -442,6 +462,10 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     3. Concluye con una recomendación de acción para cada segmento.
     - Nombres/Identificadores: SIEMPRE propone borrar ("metodo": "drop-column") columnas como IDs, Nombres, Apellidos, RUT, DNI, etc., ya que no aportan valor predictivo, a menos que el usuario indique lo contrario.
     - Lematización estratégica: Observa las muestras de datos. Si una columna categórica contiene frases, etiquetas separadas por espacios (ej: "acción drama terror") o descripciones largas, DEBES proponer "Lematizar": true.
+    
+    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
+    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Perfilamiento de Datos")
 
@@ -503,3 +527,185 @@ def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
             
     datos_json = json.loads(json_str)
     return pd.DataFrame([datos_json])
+
+# --- CONFIGURACIÓN GCP ---
+GCS_BUCKET = "archivos_back"
+PROJECT    = "project-6d52cafa-4432-4186-aeb"
+DATASET    = "Cubo"
+CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
+
+def subir_a_gcs(archivo, carpeta):
+    client = get_storage_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(f"{carpeta}/{archivo.name}")
+    blob.upload_from_file(archivo, rewind=True)
+
+def tabla_existe_en_bq(tabla_id):
+    client = get_bq_client()
+    try:
+        client.get_table(f"{PROJECT}.{DATASET}.{tabla_id}")
+        return True
+    except Exception:
+        return False
+
+def leer_cubo_de_bq():
+    client = get_bq_client()
+    query = f"SELECT * FROM `{PROJECT}.{DATASET}.cubo_analitico`"
+    job_config = bigquery.QueryJobConfig()
+    return client.query(
+        query,
+        job_config=job_config,
+        location="northamerica-south1"
+    ).to_dataframe()
+
+def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        if all(tabla_existe_en_bq(t) for t in nombres_tablas):
+            return True
+        time.sleep(intervalo)
+    return False
+
+def llamar_build_cubo():
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        
+        response = requests.post(
+            CF_URL,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json"
+            }
+        )
+        return response.status_code == 200, response.json()
+    except Exception as e:
+        return False, str(e)
+
+def get_bq_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return bigquery.Client(
+        credentials=credentials,
+        project=PROJECT,
+        location="northamerica-south1"
+    )
+
+def get_storage_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return storage.Client(credentials=credentials, project=PROJECT)
+
+def _normalizar_clave_metrica(clave):
+    return str(clave).lower().replace("_", "").replace("-", "").replace(" ", "")
+
+def _obtener_metrica(metricas, nombres):
+    if not isinstance(metricas, dict):
+        return None
+    objetivo = {_normalizar_clave_metrica(n) for n in nombres}
+    for clave, valor in metricas.items():
+        if _normalizar_clave_metrica(clave) in objetivo:
+            return valor
+    return None
+
+def _formatear_metrica(valor):
+    if valor is None:
+        return "N/D"
+    if isinstance(valor, (int, np.integer)):
+        return f"{int(valor):,}"
+    if isinstance(valor, (float, np.floating)):
+        return f"{float(valor):,.4f}"
+    return str(valor)
+
+def _tipo_resultado_dashboard(metricas, es_clustering):
+    tipo = str(metricas.get("tipo_problema", "")).lower() if isinstance(metricas, dict) else ""
+    if es_clustering:
+        return "clustering"
+    if "regresion" in tipo or "regression" in tipo:
+        return "regresion"
+    if "forecast" in tipo or "sarima" in tipo:
+        return "forecasting"
+    return "clasificacion"
+
+def _metricas_dashboard(metricas, es_clustering):
+    metricas_precision = metricas.get("metricas_precision", {}) if isinstance(metricas, dict) else {}
+    tipo = _tipo_resultado_dashboard(metricas, es_clustering)
+
+    if tipo == "clustering":
+        return [
+            ("Silhouette Score", _obtener_metrica(metricas_precision, ["Silhouette Score", "silhouette"])),
+            ("Davies Bouldin", _obtener_metrica(metricas_precision, ["Davies-Bouldin Index", "Davies Bouldin"])),
+            ("Numero de clusters", metricas.get("mejor_numero_clusters") or metricas.get("n_clusters")),
+        ]
+    if tipo == "regresion":
+        return [
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+            ("R²", _obtener_metrica(metricas_precision, ["R2", "R²"])),
+        ]
+    if tipo == "forecasting":
+        return [
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MSE", _obtener_metrica(metricas_precision, ["MSE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+        ]
+    return [
+        ("Accuracy", _obtener_metrica(metricas_precision, ["Accuracy"])),
+        ("Precision", _obtener_metrica(metricas_precision, ["Precision"])),
+        ("Recall", _obtener_metrica(metricas_precision, ["Recall"])),
+        ("F1 Score", _obtener_metrica(metricas_precision, ["F1-Score", "F1", "F1 Score"])),
+        ("ROC-AUC", _obtener_metrica(metricas_precision, ["ROC-AUC", "ROC AUC"])),
+        ("PR-AUC", _obtener_metrica(metricas_precision, ["PR-AUC", "PR AUC"])),
+    ]
+
+def _contar_logs(logs, patrones):
+    total = 0
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        if any(p in accion for p in patrones):
+            total += 1
+    return total
+
+def _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales):
+    eliminadas = set(columnas_originales) - set(columnas_finales)
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        col = log.get("columna")
+        if col and col != "__dataset__" and ("eliminacion_columna" in accion or "borrada" in accion):
+            eliminadas.add(col)
+    return sorted(eliminadas)
+
+def _resumen_tecnico_pipeline(res, cleaner, df_original):
+    logs = getattr(cleaner, "logs_limpieza", []) if cleaner is not None else []
+    columnas_originales = list(df_original.columns) if df_original is not None else []
+    columnas_finales = list(getattr(cleaner, "df", pd.DataFrame()).columns) if cleaner is not None else []
+    columnas_usadas = res.get("cols", [])
+    eliminadas = _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales + [res.get("target")])
+
+    return {
+        "columnas_originales": len(columnas_originales),
+        "columnas_usadas": len(columnas_usadas),
+        "columnas_eliminadas": eliminadas,
+        "nulos_tratados": _contar_logs(logs, ["imputacion", "eliminacion_filas_nulas"]),
+        "outliers_corregidos": _contar_logs(logs, ["outliers_recortados"]),
+        "categoricas_codificadas": _contar_logs(logs, ["dummies", "target_encoding", "ordinal_encoding", "woe"]),
+        "tiempo_total": res.get("tiempo_total_ejecucion", "N/D"),
+        "logs": logs,
+    }
+
+def _render_metricas_clave(metricas_filtradas):
+    visibles = [(nombre, valor) for nombre, valor in metricas_filtradas if valor is not None]
+    if not visibles:
+        return
+    for inicio in range(0, len(visibles), 4):
+        cols_metricas = st.columns(min(4, len(visibles) - inicio))
+        for col_ui, (nombre, valor) in zip(cols_metricas, visibles[inicio:inicio + 4]):
+            col_ui.metric(nombre, _formatear_metrica(valor))
