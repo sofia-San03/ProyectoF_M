@@ -18,3 +18,5 @@ db-dtypes
 requests
 google-auth[requests]
 google-auth-oauthlib
+tabulate
+db-dtypes
