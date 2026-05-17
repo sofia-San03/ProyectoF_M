@@ -12,3 +12,9 @@ joblib
 openpyxl
 ydata-profiling
 category_encoders
+google-cloud-storage
+google-cloud-bigquery
+db-dtypes
+requests
+google-auth[requests]
+google-auth-oauthlib

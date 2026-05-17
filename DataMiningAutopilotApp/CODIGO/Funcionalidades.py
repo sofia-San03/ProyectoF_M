@@ -111,12 +111,21 @@ try:
 except Exception:
     pass
 
-if not api_key and os.path.exists("GEMINI_KEY.txt"):
-    try:
-        with open("GEMINI_KEY.txt", "r", encoding="utf-8") as f:
-            api_key = f.read().strip()
-    except Exception:
-        pass
+gemini_key_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "credenciales", "GEMINI_KEY.txt"))
+
+if not api_key:
+    if os.path.exists(gemini_key_path):
+        try:
+            with open(gemini_key_path, "r", encoding="utf-8") as f:
+                api_key = f.read().strip()
+        except Exception:
+            pass
+    elif os.path.exists("GEMINI_KEY.txt"):
+        try:
+            with open("GEMINI_KEY.txt", "r", encoding="utf-8") as f:
+                api_key = f.read().strip()
+        except Exception:
+            pass
 
 if api_key:
     genai.configure(api_key=api_key)
@@ -267,7 +276,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
     dict_instruction = ""
     if diccionario_datos:
         dict_context = f"\n========================================\nDICCIONARIO DE DATOS PROPORCIONADO POR EL USUARIO (Información de negocio extra):\n{diccionario_datos}\n========================================\n"
-        dict_instruction = '\nOBLIGATORIO: Como has recibido un diccionario de datos del usuario, es mandatorio que comiences tu respuesta de análisis (o de confirmación de ajustes) con la frase exacta: "He recibido tu diccionario de datos, donde..." y continúes resumiendo brevemente lo que comprendes de él y cómo influye de manera provechosa en tu propuesta estratégica.\n'
+        dict_instruction = '\nOBLIGATORIO: Como has recibido un diccionario de datos del usuario, es mandatorio que Finalices tu respuesta de análisis (o de confirmación de ajustes) con la frase exacta: "He recibido tu diccionario de datos, donde..." y continúes resumiendo brevemente lo que comprendes de él y cómo influye de manera provechosa en tu propuesta estratégica.\n'
 
     if is_initial:
         prompt = f"""

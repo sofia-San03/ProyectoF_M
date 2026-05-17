@@ -1,5 +1,18 @@
 import json
 import os
+
+# --- CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES GCP ---
+path_credenciales = os.path.abspath(os.path.join(os.path.dirname(__file__), "credenciales", "BigQuery_credentials.json"))
+
+if os.path.exists(path_credenciales):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path_credenciales
+
+from google.cloud import storage, bigquery
+import requests
+import time
+import google.auth
+import google.auth.transport.requests
+import google.oauth2.id_token
 import re
 from io import StringIO
 
@@ -33,6 +46,80 @@ from CODIGO.Funcionalidades import (
 
 st.set_page_config(page_title="Autopilot", page_icon="⚡", layout="wide")
 load_css("styles.css")
+
+# --- CONFIGURACIÓN GCP ---
+GCS_BUCKET = "archivos_back"
+PROJECT    = "project-6d52cafa-4432-4186-aeb"
+DATASET    = "Cubo"
+CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
+
+def subir_a_gcs(archivo, carpeta):
+    client = get_storage_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(f"{carpeta}/{archivo.name}")
+    blob.upload_from_file(archivo, rewind=True)
+
+def tabla_existe_en_bq(tabla_id):
+    client = get_bq_client()
+    try:
+        client.get_table(f"{PROJECT}.{DATASET}.{tabla_id}")
+        return True
+    except Exception:
+        return False
+
+def leer_cubo_de_bq():
+    client = get_bq_client()
+    query = f"SELECT * FROM `{PROJECT}.{DATASET}.cubo_analitico`"
+    job_config = bigquery.QueryJobConfig()
+    return client.query(
+        query,
+        job_config=job_config,
+        location="northamerica-south1"
+    ).to_dataframe()
+
+def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        if all(tabla_existe_en_bq(t) for t in nombres_tablas):
+            return True
+        time.sleep(intervalo)
+    return False
+
+def llamar_build_cubo():
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        
+        response = requests.post(
+            CF_URL,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json"
+            }
+        )
+        return response.status_code == 200, response.json()
+    except Exception as e:
+        return False, str(e)
+
+def get_bq_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return bigquery.Client(
+        credentials=credentials,
+        project=PROJECT,
+        location="northamerica-south1"
+    )
+
+def get_storage_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return storage.Client(credentials=credentials, project=PROJECT)
 
 if "phase" not in st.session_state:
     st.session_state.phase = "CARGA"
@@ -91,11 +178,11 @@ map_nav_to_phase = {
 with st.sidebar:
     st.markdown("""
     <div style="display:flex; align-items:center; gap: 10px; margin-bottom: 20px;">
-        <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(78, 222, 163, 0.1); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(78, 222, 163, 0.2);">
-            <span style="font-size: 20px;">📑</span>
+        <div style="width: 36px; height: 36px; border-radius: 8px; background: rgba(78, 222, 163, 0.1); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(78, 222, 163, 0.2);">
+            <span style="font-size: 18px !important;">📑</span>
         </div>
         <div>
-            <h2 style="margin:0; font-size: 14px; color: #4edea3 !important; padding:0; background:none; border:none; box-shadow:none;">Data Mining Autopilot</h2>
+            <span style="margin:0; font-size: 13px !important; font-weight: 700 !important; color: #4edea3 !important; padding:0; background:none; border:none; box-shadow:none; font-family: 'Sora', sans-serif; display: block; line-height: 1.2 !important; letter-spacing: 0.5px !important;">Data Mining Autopilot</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -120,51 +207,20 @@ if st.session_state.phase == "CARGA":
     st.markdown("<h2 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#bbcabf'>Sube tus datasets para comenzar el procesamiento neuronal.</p><br>", unsafe_allow_html=True)
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        uploaded_file = st.file_uploader("Sube tu archivo", type=["csv", "xlsx", "json"])
-        if uploaded_file:
-            file_key = f"df_loaded_{uploaded_file.name}_{uploaded_file.size}"
-            if st.session_state.get("last_uploaded_file") != file_key:
-                st.session_state.proposal = None
-                st.session_state.config_pipeline = None
-                st.session_state.results = None
-                st.session_state.cleaner = None
-                st.session_state.messages_propuesta = []
-                st.session_state.messages_resultados = []
-                st.session_state.chat_session = iniciar_chat()
-                st.session_state.chat_resultados_session = iniciar_chat()
-                
-                with st.spinner("Cargando y procesando datos..."):
-                    try:
-                        if uploaded_file.name.endswith(".csv"):
-                            try:
-                                df_temp = pd.read_csv(uploaded_file, encoding="utf-8")
-                            except UnicodeDecodeError:
-                                uploaded_file.seek(0)
-                                df_temp = pd.read_csv(uploaded_file, encoding="latin1")
-                        elif uploaded_file.name.endswith(".json"):
-                            try:
-                                df_temp = pd.read_json(uploaded_file)
-                            except ValueError:
-                                uploaded_file.seek(0)
-                                df_temp = pd.read_json(uploaded_file, lines=True)
-                        else:
-                            df_temp = pd.read_excel(uploaded_file)
-                        st.session_state.df = df_temp
-                        st.session_state.last_uploaded_file = file_key
-                        st.success(f"✅ Dataset cargado con éxito: **{uploaded_file.name}**")
-                    except Exception as e:
-                        st.error(f"Error al procesar el archivo: {e}")
-            else:
-                st.success(f"✅ Dataset activo: **{uploaded_file.name}** ({st.session_state.df.shape[0]} filas, {st.session_state.df.shape[1]} columnas)")
-        else:
-            st.session_state.df = None
-            st.session_state.last_uploaded_file = None
-
+        hechos = st.file_uploader("Dataset principal (Tabla de hechos)", type=["csv", "xlsx"])
+        if hechos:
+            st.success(f"✅ Dataset principal listo: **{hechos.name}**")
+            
     with col2:
-        uploaded_dict = st.file_uploader("Sube tus diccionarios", type=["csv", "xlsx", "json", "txt"], key="dict_uploader")
+        dimensiones = st.file_uploader("Dimensiones (Opcional)", type=["csv", "xlsx"], accept_multiple_files=True)
+        if dimensiones:
+            st.success(f"✅ {len(dimensiones)} archivos de dimensiones listos")
+            
+    with col3:
+        uploaded_dict = st.file_uploader("Diccionario de datos (Opcional)", type=["csv", "xlsx", "json", "txt"], key="dict_uploader")
         if uploaded_dict:
             dict_key = f"dict_loaded_{uploaded_dict.name}_{uploaded_dict.size}"
             if st.session_state.get("last_uploaded_dict") != dict_key:
@@ -192,11 +248,11 @@ if st.session_state.phase == "CARGA":
                         
                         st.session_state.data_dict_name = uploaded_dict.name
                         st.session_state.last_uploaded_dict = dict_key
-                        st.success(f"✅ Diccionario de datos cargado con éxito: **{uploaded_dict.name}**")
+                        st.success(f"✅ Diccionario cargado con éxito: **{uploaded_dict.name}**")
                     except Exception as e:
                         st.error(f"Error al procesar el diccionario de datos: {e}")
             else:
-                st.success(f"✅ Diccionario de datos activo: **{st.session_state.data_dict_name}**")
+                st.success(f"✅ Diccionario activo: **{st.session_state.data_dict_name}**")
             
             if st.button("Eliminar Diccionario", use_container_width=True):
                 st.session_state.data_dict_content = None
@@ -208,13 +264,66 @@ if st.session_state.phase == "CARGA":
             st.session_state.data_dict_name = None
             st.session_state.last_uploaded_dict = None
 
-    if st.session_state.df is not None:
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
-        with col_btn_center:
-            if st.button("🚀 Confirmar Datos", use_container_width=True, type="primary"):
+    # El botón se activa solo cuando el Dataset principal está cargado
+    puede_construir = hechos is not None
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
+    with col_btn_center:
+        if st.button("🚀 Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
+            try:
+                # Resetear estados de propuesta previos
+                st.session_state.proposal = None
+                st.session_state.config_pipeline = None
+                st.session_state.results = None
+                st.session_state.cleaner = None
+                st.session_state.messages_propuesta = []
+                st.session_state.messages_resultados = []
+                st.session_state.chat_session = iniciar_chat()
+                st.session_state.chat_resultados_session = iniciar_chat()
+
+                # Paso 1: subir a GCS
+                with st.spinner("Subiendo archivos a Cloud Storage..."):
+                    subir_a_gcs(hechos, "Tabla_hechos")
+                    if dimensiones:
+                        for dim in dimensiones:
+                            subir_a_gcs(dim, "Dimensiones")
+                st.success("Archivos subidos a Cloud Storage")
+
+                # Paso 2: esperar que el trigger cargue a BigQuery
+                nombres_esperados = ["hechos_raw"]
+                if dimensiones:
+                    nombres_esperados += [
+                        f"dim_{dim.name.split('.')[0].upper()}_raw"
+                        for dim in dimensiones
+                    ]
+                
+                with st.spinner("Esperando carga en BigQuery..."):
+                    ok = esperar_tablas_bq(nombres_esperados)
+
+                if not ok:
+                    st.error("Timeout: las tablas no aparecieron en BigQuery. Revisa los logs.")
+                    st.stop()
+                st.success("Tablas cargadas en BigQuery")
+
+                # Paso 3: construir la vista
+                with st.spinner("Construyendo cubo analítico..."):
+                    ok, resultado = llamar_build_cubo()
+
+                if not ok:
+                    st.error(f"Error al construir el cubo: {resultado}")
+                    st.stop()
+                st.success("Cubo construido con éxito")
+
+                # Paso 4: leer el cubo a dataframe para el resto del flujo
+                with st.spinner("Cargando datos para análisis..."):
+                    st.session_state.df = leer_cubo_de_bq()
+
                 st.session_state.phase = "PROPUESTA"
                 st.rerun()
+
+            except Exception as e:
+                st.error(f"Error en el proceso: {str(e)}")
 
 elif st.session_state.phase == "PROPUESTA":
     tab1, tab2 = st.tabs(["Estrategia de IA", "Reporte de Datos"])
@@ -317,10 +426,19 @@ elif st.session_state.phase == "PROPUESTA":
                 table_data = []
                 for col, params in reglas_detectadas.items():
                     params_validos = isinstance(params, dict)
+                    metodo_usado = params.get("metodo", "AUTO") if params_validos else "AUTO"
+                    
+                    if str(metodo_usado).lower() in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
+                        tratamiento_str = "Imputación"
+                    elif str(metodo_usado).lower() == "drop-column":
+                        tratamiento_str = "Eliminar Columna"
+                    else:
+                        tratamiento_str = "Imputación"
+                    
                     table_data.append(
                         {
                             "Columna": col,
-                            "Tratamiento": "AUTO",
+                            "Tratamiento": tratamiento_str,
                             "Estado": "✅" if params_validos else "❌",
                             "Dummies": "Si" if params_validos and params.get("Dummies") else "No",
                         }
@@ -585,7 +703,6 @@ elif st.session_state.phase == "RESULTADOS":
                 st.session_state.messages_resultados.append({"role": "assistant", "content": explicacion})
                 st.rerun()
 
-        st.write(f"**Variables procesadas:** {', '.join(res['cols'])}")
 
         if es_clustering_resultado:
             metricas_cluster = metricas_interfaz
@@ -695,16 +812,6 @@ elif st.session_state.phase == "RESULTADOS":
                     if visualizaciones.get("coeficientes"):
                         st.image(visualizaciones["coeficientes"], caption="Coeficientes")
 
-            with st.expander("Validacion, hiperparametros y detalles"):
-                st.json(
-                    {
-                        "validacion": metricas_interfaz.get("validacion", {}),
-                        "mejores_hiperparametros": metricas_interfaz.get("mejores_hiperparametros", {}),
-                        "comparacion_distancias": metricas_interfaz.get("comparacion_distancias", []),
-                        "scorecard": metricas_interfaz.get("scorecard", {}),
-                        "segmentos_riesgo": metricas_interfaz.get("segmentos_riesgo", {}),
-                    }
-                )
 
         st.markdown("### Chat de Resultados")
         chat_container_res = st.container(height=400)

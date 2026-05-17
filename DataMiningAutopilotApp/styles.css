@@ -97,6 +97,19 @@ div[data-testid="stBaseButton-secondary"] button:hover {
     transform: translateY(-2px) !important;
 }
 
+/* Quick question chips inside columns (forces same height and centers wrapped text) */
+div[data-testid="column"] button[kind="secondary"],
+div[data-testid="column"] div[data-testid="stBaseButton-secondary"] button {
+    height: 85px !important;
+    min-height: 85px !important;
+    font-size: 0.8rem !important;
+    padding: 5px 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+}
+
 /* Base text */
 .stMarkdown p,
 .stMarkdown li,
@@ -142,17 +155,17 @@ div[data-testid="stBaseButton-secondary"] button:hover {
 
 /* File Uploader */
 [data-testid="stFileUploader"] {
-    max-width: 60%;
+    max-width: 100%;
     margin: 0 auto;
     background: rgba(17, 24, 39, 0.8);
     backdrop-filter: blur(12px);
     border-radius: 20px;
     border: 1px solid rgba(31, 41, 55, 0.5);
-    padding: 20px;
+    padding: 15px;
 }
 
 [data-testid="stFileUploaderDropzone"] {
-    min-height: 250px;
+    min-height: 120px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -170,13 +183,13 @@ div[data-testid="stBaseButton-secondary"] button:hover {
 
 [data-testid="stFileUploaderDropzone"] div,
 [data-testid="stFileUploaderDropzone"] span {
-    font-size: 1.25rem !important;
+    font-size: 0.9rem !important;
     color: #bbcabf !important;
 }
 
 [data-testid="stFileUploader"] label p {
-    font-size: 1.8rem !important;
-    font-weight: 800 !important;
+    font-size: 1.15rem !important;
+    font-weight: 700 !important;
     color: #4edea3 !important;
     text-align: center;
     font-family: 'Sora', sans-serif;
