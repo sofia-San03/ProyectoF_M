@@ -1,2 +1,5 @@
 credenciales.json
 GEMINI_KEY.txt
+
+DataMiningAutopilotApp/credenciales/*.json
+DataMiningAutopilotApp/credenciales/*.txt

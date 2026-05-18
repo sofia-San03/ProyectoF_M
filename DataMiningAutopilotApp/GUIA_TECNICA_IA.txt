@@ -1,0 +1,118 @@
+GUIA TECNICA PARA LA IA: reglas_dict
+
+Este documento define el formato exacto en que la IA debe generar la configuracion para el metodo Clean_All_Rows.
+
+1. ESTRUCTURA DEL JSON OBLIGATORIA
+
+{
+  "target": "nombre_columna_objetivo",
+  "modelo": "Regresion_lineal" | "Regresion_logistica" | "Arbol_decision" | "Clustering_optimizacion" | "Redes_neuronales" | "KNN" | "Credit_scoring",
+  "n_clusters": null | N,
+  "reglas_dict": {
+    "columna_ejemplo": {
+      "metodo": "mean" | "median" | "mode" | "drop-values" | "drop-column",
+      "valorDefecto": null,
+      "tolSustitucion": 0.05,
+      "tolMantenerCols": 0.1,
+      "Lematizar": false,
+      "Dummies": false,
+      "MaxDummies": 20,
+      "TargetEncoding": false,
+      "WOE": false,
+      "bins_woe": 5,
+      "Ordinal": false,
+      "orden": [],
+      "Fecha": false
+    }
+  },
+  "EsPCA": false
+}
+
+2. MODELOS DISPONIBLES
+
+- Regresion_lineal: regresion supervisada; requiere target numerico continuo.
+- Regresion_logistica: clasificacion binaria; requiere target con exactamente 2 clases.
+- Arbol_decision: soporta clasificacion binaria, clasificacion multiclase y regresion.
+- Clustering_optimizacion: aprendizaje no supervisado; NO requiere target. Usar "target": null.
+- Redes_neuronales: modelo supervisado; puede sugerirse para clasificacion o regresion cuando hay suficientes datos.
+- KNN: modelo supervisado; puede sugerirse para clasificacion o regresion, especialmente con variables numericas escaladas.
+- Credit_scoring: clasificacion binaria para riesgo/credito; requiere target binario y se recomienda usar WOE/IV en variables predictoras relevantes.
+
+3. PARAMETROS PERMITIDOS
+
+- metodo: estrategia para nulos o columnas. Usar "mean" en numericas, "median" cuando hay outliers, "mode" en categoricas, "drop-values" para eliminar filas con nulos o "drop-column" para eliminar una columna no util.
+- valorDefecto: valor exacto para rellenar nulos. Si existe, tiene prioridad sobre metodo.
+- tolSustitucion: umbral maximo de nulos para intentar sustitucion.
+- tolMantenerCols: si la proporcion de nulos supera este valor, la columna se elimina.
+- Lematizar: solo para texto libre. Limpia texto, remueve stopwords y crea variables de palabras.
+- Dummies: fuerza one-hot encoding en variables categoricas.
+- MaxDummies: limite de categorias antes de agrupar categorias poco frecuentes en "otros".
+- TargetEncoding: reemplaza categorias por la media del target. Solo en modelos supervisados.
+- WOE: aplica Weight of Evidence. Solo para problemas binarios supervisados, especialmente Credit_scoring.
+- bins_woe: numero de bins para calcular WOE/IV en variables numericas.
+- Ordinal: aplica codificacion ordinal. Requiere orden.
+- orden: lista con el orden logico de categorias, por ejemplo ["bajo", "medio", "alto"].
+- Fecha: (BOOL) Si es true, el sistema tratara la columna como fecha, extrayendo features (año, mes, dia, dia_semana) y calculando t_paso (días desde el inicio).
+- n_clusters: (OPCIONAL, SOLO PARA CLUSTERING) Si el usuario o la IA definen un numero entero N, el modelo usara exactamente N clusters. Si es null o no se incluye, el sistema encontrara el numero optimo automaticamente (AUTO).
+
+4. REGLAS DE ORO Y RESTRICCIONES
+
+- No incluir la columna target dentro de reglas_dict.
+- No incluir columnas ID dentro de reglas_dict.
+- Solo usar columnas que existan en el dataset original.
+- No pedir Lematizar=true en columnas numericas.
+- No usar WOE ni TargetEncoding cuando el modelo sea Clustering_optimizacion.
+- Para Clustering_optimizacion, target debe ser null porque el pipeline debe ejecutarse sin variable objetivo.
+- Para Credit_scoring, priorizar WOE=true y bins_woe=5 en variables numericas o categoricas con sentido crediticio; no aplicar WOE a texto libre.
+- Para Regresion_logistica y Credit_scoring, validar que el target tenga exactamente dos clases.
+- Para Arbol_decision, Redes_neuronales y KNN, elegir segun tipo de target: numerico continuo para regresion; categorico/discreto para clasificacion.
+- Las columnas casi constantes se eliminaran automaticamente si no aportan informacion.
+- Los outliers se analizan automaticamente con IQR antes de imputar nulos.
+- Identificar columnas que representen tiempo o fechas (ej. "fecha_venta", "timestamp", "create_at") y asignarles "Fecha": true. Esto ordenará los datos cronológicamente y creará una columna "t_paso" fundamental para series de tiempo o análisis secuenciales.
+- Al final del preprocesamiento, todas las variables de entrada deben ser numericas.
+- en reglas_dict usar todas las columnas del dataset para evitar errores al ejecutar el pipeline de preprocesamiento, recomendar un tratamiento para cada columna.
+- **PROHIBICIÓN DE NOMBRES**: SIEMPRE propón "metodo": "drop-column" para columnas que contengan nombres de personas (directores, actores, clientes), IDs, RUT, DNI, correos, etc. NO USAR TargetEncoding ni Dummies en estas columnas a menos que el usuario lo pida explícitamente, ya que causan sobreajuste masivo.
+- **DETECCIÓN DE TAGS/LISTAS**: Si una columna categórica contiene múltiples etiquetas separadas por barras "|", comas "," o espacios, es OBLIGATORIO usar "Lematizar": true. NO USAR Dummies en estas columnas porque trataría la combinación como una única categoría.
+
+5. EJEMPLO DE CONFIGURACION VALIDA
+
+{
+  "target": "precio_casa",
+  "modelo": "Regresion_lineal",
+  "reglas_dict": {
+    "descripcion": { "Lematizar": true },
+    "calidad": { "Ordinal": true, "orden": ["mala", "buena", "excelente"] },
+    "alcaldia": { "TargetEncoding": true },
+    "metros": { "metodo": "median" },
+    "fecha_construccion": { "Fecha": true }
+  },
+  "EsPCA": false
+}
+
+6. EJEMPLO PARA CLUSTERING
+
+{
+  "target": null,
+  "modelo": "Clustering_optimizacion",
+  "n_clusters": 5,
+  "reglas_dict": {
+    "segmento": { "Dummies": true, "MaxDummies": 12 },
+    "fecha_alta": { "metodo": "drop-column" },
+    "ingreso": { "metodo": "median" }
+  },
+  "EsPCA": false
+}
+
+7. EJEMPLO PARA CREDIT SCORING
+
+{
+  "target": "default",
+  "modelo": "Credit_scoring",
+  "reglas_dict": {
+    "edad": { "WOE": true, "bins_woe": 5, "metodo": "median" },
+    "ingresos": { "WOE": true, "bins_woe": 5, "metodo": "median" },
+    "historial_crediticio": { "Dummies": true, "MaxDummies": 10 },
+    "nivel_riesgo": { "Ordinal": true, "orden": ["bajo", "medio", "alto"] }
+  },
+  "EsPCA": false
+}
