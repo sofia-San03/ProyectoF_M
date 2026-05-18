@@ -27,6 +27,25 @@ PROJECT    = "project-6d52cafa-4432-4186-aeb"
 DATASET    = "Cubo"
 CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
 
+def limpiar_dataset_anterior():
+    client = get_bq_client()
+    gcs = get_storage_client()
+    
+    tablas = client.list_tables(f"{PROJECT}.{DATASET}")
+    for tabla in tablas:
+        if tabla.table_id.endswith("_raw") or tabla.table_id == "cubo_analitico":
+            client.delete_table(
+                f"{PROJECT}.{DATASET}.{tabla.table_id}", 
+                not_found_ok=True
+            )
+            print(f"Tabla eliminada: {tabla.table_id}")
+    
+    bucket = gcs.bucket(GCS_BUCKET)
+    for carpeta in ["Tabla_hechos", "Dimensiones"]:
+        blobs = list(bucket.list_blobs(prefix=f"{carpeta}/"))
+        for blob in blobs:
+            blob.delete()
+
 def subir_a_gcs(archivo, carpeta):
     client = get_storage_client()  # no storage.Client() directo
     bucket = client.bucket(GCS_BUCKET)
@@ -59,23 +78,21 @@ def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
         time.sleep(intervalo)
     return False
 
-def llamar_build_cubo():
+def llamar_build_cubo(nombres_dims=None):
     try:
-        import google.auth
-        import google.auth.transport.requests
-
-        credentials, project = google.auth.default(
+        credentials, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
         auth_req = google.auth.transport.requests.Request()
         credentials.refresh(auth_req)
-        
+
         response = requests.post(
             CF_URL,
             headers={
                 "Authorization": f"Bearer {credentials.token}",
                 "Content-Type": "application/json"
-            }
+            },
+            json={"dimensiones": nombres_dims or []}
         )
         return response.status_code == 200, response.json()
     except Exception as e:
@@ -500,21 +517,24 @@ if st.session_state.phase == "CARGA":
         )
     with col2:
         dimensiones = st.file_uploader(
-            "Dimensiones", type=["csv", "xlsx"],
+            "Dimensiones (opcional)", type=["csv", "xlsx"],
             accept_multiple_files=True
         )
 
-    if hechos and dimensiones:
+    dimensiones = dimensiones or []
+
+    if hechos:
         if st.button("✅ Cargar y construir cubo"):
             try:
-                # Paso 1: subir a GCS
+                with st.spinner("..."):
+                    limpiar_dataset_anterior()
+
                 with st.spinner("Subiendo archivos a Cloud Storage..."):
                     subir_a_gcs(hechos, "Tabla_hechos")
                     for dim in dimensiones:
                         subir_a_gcs(dim, "Dimensiones")
                 st.success("Archivos subidos")
 
-                # Paso 2: esperar que el trigger cargue a BigQuery
                 nombres_esperados = ["hechos_raw"] + [
                     f"dim_{dim.name.split('.')[0].upper()}_raw"
                     for dim in dimensiones
@@ -523,20 +543,28 @@ if st.session_state.phase == "CARGA":
                     ok = esperar_tablas_bq(nombres_esperados)
 
                 if not ok:
-                    st.error("Timeout: las tablas no aparecieron en BigQuery. Revisa los logs.")
+                    st.error("Timeout: las tablas no aparecieron en BigQuery.")
                     st.stop()
                 st.success("Tablas cargadas en BigQuery")
 
-                # Paso 3: construir la vista
                 with st.spinner("Construyendo cubo analítico..."):
-                    ok, resultado = llamar_build_cubo()
-
-                if not ok:
-                    st.error(f"Error al construir el cubo: {resultado}")
-                    st.stop()
+                    if dimensiones:
+                        nombres_dims = [
+                            f"dim_{dim.name.split('.')[0].upper()}_raw"
+                            for dim in dimensiones
+                        ]
+                        ok, resultado = llamar_build_cubo(nombres_dims)
+                        if not ok:
+                            st.error(f"Error al construir el cubo: {resultado}")
+                            st.stop()
+                    else:
+                        client = get_bq_client()
+                        client.query(f"""
+                            CREATE OR REPLACE VIEW `{PROJECT}.{DATASET}.cubo_analitico` AS
+                            SELECT * FROM `{PROJECT}.{DATASET}.hechos_raw`
+                        """, location="northamerica-south1").result()
                 st.success("Cubo construido")
 
-                # Paso 4: leer el cubo a dataframe para el resto del flujo
                 with st.spinner("Cargando datos para análisis..."):
                     st.session_state.df = leer_cubo_de_bq()
 
