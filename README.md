@@ -38,6 +38,47 @@ Este proyecto es una aplicación de **Streamlit** de nivel empresarial diseñada
 
 ---
 
+## 🔀 Modos de operación
+
+La aplicación detecta automáticamente el entorno al iniciar y elige el modo de operación adecuado. No se requiere configuración manual.
+
+### 🟢 Modo Cloud (producción)
+
+**Se activa cuando** existe alguna de estas condiciones:
+- El archivo `credenciales/BigQuery_credentials.json` es un service account válido (`"type": "service_account"`).
+- Las Application Default Credentials (ADC) están disponibles en el entorno (`gcloud auth application-default login` o credenciales de Workload Identity en GCP).
+
+**Flujo de datos:**
+1. Los archivos se suben a **Google Cloud Storage** (bucket `archivos_back`).
+2. Un trigger en GCS carga los datos en **BigQuery** (dataset `Cubo`).
+3. La **Cloud Function `armar-cubo`** une la tabla de hechos con las dimensiones y crea la vista `cubo_analitico`.
+4. La app lee el cubo desde BigQuery como DataFrame.
+
+**Cómo configurarlo:**
+- Copia `credenciales/BigQuery_credentials.example.json` → `credenciales/BigQuery_credentials.json` y reemplaza los campos con los valores reales de tu service account.
+- O bien ejecuta `gcloud auth application-default login` antes de iniciar la app.
+
+### 🔵 Modo Local (desarrollo / fallback)
+
+**Se activa cuando** no hay credenciales GCP ni ADC disponibles (entorno de desarrollo sin acceso a la nube).
+
+**Flujo de datos:**
+1. Los archivos subidos se leen directamente en memoria como DataFrames.
+2. Si se suben dimensiones, se construye el cubo local con `LEFT JOIN` sobre columnas de nombre coincidente (equivalente simplificado de la Cloud Function).
+3. El DataFrame resultante se almacena en sesión y el flujo continúa igual que en modo cloud.
+
+**Funcionalidades que siguen activas en modo local:**
+- Chat estratégico con Gemini (requiere `GEMINI_KEY.txt`).
+- Todos los modelos de ML (limpieza, entrenamiento, predicción).
+- Reportes exploratorios de calidad de datos.
+- Predicción desde texto o archivo.
+
+> **Nota:** El cubo construido localmente usa un JOIN genérico. Si la Cloud Function `armar-cubo` aplica transformaciones adicionales, el resultado puede diferir del cubo en producción.
+
+> **Forzar modo local manualmente:** ejecuta `export FORCE_LOCAL_MODE=1` antes de iniciar la app para saltarte la detección de credenciales y operar siempre en modo local. Útil cuando la Cloud Function tiene bugs o se quiere desarrollar sin dependencias cloud.
+
+---
+
 ## ⚙️ Instrucciones de Configuración y Uso
 
 ### 1. Requisitos Previos

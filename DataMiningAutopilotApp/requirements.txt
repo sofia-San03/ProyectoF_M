@@ -19,3 +19,4 @@ requests
 google-auth[requests]
 google-auth-oauthlib
 tabulate
+setuptools<80

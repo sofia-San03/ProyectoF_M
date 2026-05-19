@@ -424,7 +424,10 @@ class Transformar_Df:
         categorias_validas = freqs_norm[freqs_norm > min_prop].index.tolist()
         self.categorias_validas[columna] = categorias_validas
 
-        self.df[columna] = self.df[columna].where(self.df[columna].isin(categorias_validas), "otros")
+        # Cast to object first so string "otros" can be assigned regardless of the column's dtype
+        # (e.g. Int64 nullable integers raised "Invalid value 'otros' for dtype 'Int64'")
+        col_obj = self.df[columna].astype(object)
+        self.df[columna] = col_obj.where(col_obj.isin(categorias_validas), "otros")
         return True
 
     def aplicar_target_encoding(self, columna):
