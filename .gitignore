@@ -1,0 +1,10 @@
+credenciales.json
+GEMINI_KEY.txt
+
+DataMiningAutopilotApp/credenciales/*.json
+DataMiningAutopilotApp/credenciales/*.txt
+!DataMiningAutopilotApp/credenciales/*.example.json
+# UrbanTech datos (no commitear datasets pesados)
+DataMiningAutopilotApp/data/c5_raw/
+DataMiningAutopilotApp/data/c5_processed/
+DataMiningAutopilotApp/data/cache/

@@ -424,7 +424,10 @@ class Transformar_Df:
         categorias_validas = freqs_norm[freqs_norm > min_prop].index.tolist()
         self.categorias_validas[columna] = categorias_validas
 
-        self.df[columna] = self.df[columna].where(self.df[columna].isin(categorias_validas), "otros")
+        # Cast to object first so string "otros" can be assigned regardless of the column's dtype
+        # (e.g. Int64 nullable integers raised "Invalid value 'otros' for dtype 'Int64'")
+        col_obj = self.df[columna].astype(object)
+        self.df[columna] = col_obj.where(col_obj.isin(categorias_validas), "otros")
         return True
 
     def aplicar_target_encoding(self, columna):
@@ -531,6 +534,8 @@ class Transformar_Df:
         # Guardar tipos de datos originales de entrenamiento para la inferencia
         self.dtypes_entrenamiento = {col: str(dtype) for col, dtype in self.df.dtypes.items()}
         
+        print("Reglas de Entrada:")
+        print(reglas_dict)
         self.df, logs_prevalidacion = pre_validar_columnas(self.df)
         self.logs_limpieza.extend(logs_prevalidacion)
         try:
@@ -706,24 +711,13 @@ class Transformar_Df:
             componentes = self.pca.fit_transform(self.df)
             self.df = pd.DataFrame(componentes, columns=[f'PC{i+1}' for i in range(n_comp)], index=self.df.index)
         
+        print("Reglas Finales:")
+        print(reporte)
         return reporte
 
     def transformar_nueva_tupla(self, nuevo_df):
         df_pred = nuevo_df.copy()
         
-        # Alinear nombres de columnas (case-insensitive) con las columnas originales de entrenamiento
-        if hasattr(self, "dtypes_entrenamiento") and self.dtypes_entrenamiento:
-            columnas_entrenamiento_originales = list(self.dtypes_entrenamiento.keys())
-            map_columnas = {}
-            for col_pred in df_pred.columns:
-                col_pred_lower = str(col_pred).strip().lower()
-                for col_train in columnas_entrenamiento_originales:
-                    if str(col_train).strip().lower() == col_pred_lower:
-                        map_columnas[col_pred] = col_train
-                        break
-            if map_columnas:
-                df_pred.rename(columns=map_columnas, inplace=True)
-
         # Alinear tipos de datos con los tipos originales de entrenamiento
         if hasattr(self, "dtypes_entrenamiento") and self.dtypes_entrenamiento:
             for col in df_pred.columns:

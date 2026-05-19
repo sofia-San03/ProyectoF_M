@@ -20,7 +20,6 @@ import warnings
 from uuid import uuid4
 import os
 import matplotlib as mpl
-import pandas as pd
 
 APP_COLORS = {
     'primary': '#00F2FE',
@@ -146,7 +145,7 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
 
     nombre_mejor, grid_search = sorted(busquedas, key=lambda item: item[1].best_score_, reverse=True)[0]
     mejor_modelo = grid_search.best_estimator_
-    score_train = mejor_modelo.score(X_train_sel, y_train)
+    score = mejor_modelo.score(X_train_sel, y_train)
     y_pred = mejor_modelo.predict(X_test_sel)
 
     mse = mean_squared_error(y_test, y_pred)
@@ -162,14 +161,6 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     image_prefix = _obtener_image_prefix(model_path)
     real_vs_pred_path = _guardar_real_vs_pred(y_test, y_pred, image_prefix)
 
-    estimador_base = mejor_modelo.regressor_ if hasattr(mejor_modelo, 'regressor_') else mejor_modelo
-    coeficientes_dict = {}
-    if hasattr(estimador_base, 'coef_'):
-        coef = np.asarray(estimador_base.coef_).flatten()
-        intercept = float(estimador_base.intercept_) if hasattr(estimador_base, 'intercept_') else 0.0
-        coeficientes_dict = {col: round(float(c), 4) for col, c in zip(columnas_significativas, coef)}
-        coeficientes_dict["_intercepto"] = round(intercept, 4)
-
     resultados = {
         "tipo_modelo": "Regresion_lineal",
         "modelo_seleccionado": nombre_mejor,
@@ -180,14 +171,13 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
             "variables_utilizadas": columnas_significativas
         },
         "metricas_precision": {
-            "R2_prueba (conjunto de test)": float(r2_test),
-            "R2_entrenamiento (solo conjunto de entrenamiento)": float(score_train),
+            "modelo.score": float(score),
+            "R2": float(r2_test),
             "MSE": float(mse),
             "RMSE": float(rmse),
             "MAE": float(mae),
             "MAPE": float(mape) if mape is not None else None
         },
-        "coeficientes_por_variable": coeficientes_dict,
         "cross_validation_train_R2": {
             "media": float(cv_r2_mean),
             "desviacion_estandar": float(cv_r2_std),
@@ -312,18 +302,7 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     unique_values = np.sort(np.unique(y_array))
 
     if es_clf:
-        y_series = pd.Series(y_array)
-        counts_s = y_series.value_counts()
-        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
-        if clases_huerfanas:
-            mask_keep = ~y_series.isin(clases_huerfanas)
-            X_numeric = X_numeric[mask_keep.values]
-            y_array = y_series[mask_keep].to_numpy()
-            unique_values = np.sort(np.unique(y_array))
-        
         _, class_counts = np.unique(y_array, return_counts=True)
-        if len(class_counts) < 2:
-            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con árboles requiere al menos 2 registros por clase.")
         stratify = y_array
@@ -538,10 +517,12 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
 
     y_array = np.asarray(y)
     unique_values = np.sort(np.unique(y_array))
-    
-    y_series = pd.Series(y_array)
-    counts_s = y_series.value_counts()
-    clases_huerfanas = counts_s[counts_s < 2].index.tolist()
+    if len(unique_values) != 2:
+        raise ValueError(f"La Regresión Logística requiere una variable objetivo binaria (2 valores). Se encontraron {len(unique_values)} valores: {unique_values}")
+
+    _, class_counts = np.unique(y_array, return_counts=True)
+    if np.min(class_counts) < 2:
+        raise ValueError("Regresión logística requiere al menos 2 registros por clase.")
     
     X_numeric = X.select_dtypes(include=[np.number]).copy()
     columnas_validas = X_numeric.columns[X_numeric.nunique() > 1]
@@ -549,19 +530,6 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     if X_numeric.empty:
         raise ValueError("Regresión logística requiere columnas numéricas no constantes.")
 
-    if clases_huerfanas:
-        mask_keep = ~y_series.isin(clases_huerfanas)
-        X_numeric = X_numeric[mask_keep.values]
-        y_array = y_series[mask_keep].to_numpy()
-        unique_values = np.sort(np.unique(y_array))
-
-    if len(unique_values) != 2:
-        raise ValueError(f"La Regresión Logística requiere una variable objetivo binaria (2 valores con >= 2 registros). Se encontraron {len(unique_values)} valores: {unique_values}")
-
-    _, class_counts = np.unique(y_array, return_counts=True)
-    if np.min(class_counts) < 2:
-        raise ValueError("Regresión logística requiere al menos 2 registros por clase.")
-    
     test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
@@ -1087,17 +1055,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
-        y_series = pd.Series(y_array)
-        counts_s = y_series.value_counts()
-        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
-        if clases_huerfanas:
-            mask_keep = ~y_series.isin(clases_huerfanas)
-            X_numeric = X_numeric[mask_keep.values]
-            y_array = y_series[mask_keep].to_numpy()
-        
         _, class_counts = np.unique(y_array, return_counts=True)
-        if len(class_counts) < 2:
-            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con redes neuronales requiere al menos 2 registros por clase.")
 
@@ -1335,17 +1293,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
-        y_series = pd.Series(y_array)
-        counts_s = y_series.value_counts()
-        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
-        if clases_huerfanas:
-            mask_keep = ~y_series.isin(clases_huerfanas)
-            X_numeric = X_numeric[mask_keep.values]
-            y_array = y_series[mask_keep].to_numpy()
-        
         _, class_counts = np.unique(y_array, return_counts=True)
-        if len(class_counts) < 2:
-            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con KNN requiere al menos 2 registros por clase.")
         stratify = y_array
@@ -1592,29 +1540,18 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
 
     y_array = np.asarray(y)
     unique_values = np.sort(np.unique(y_array))
-    
-    y_series = pd.Series(y_array)
-    counts_s = y_series.value_counts()
-    clases_huerfanas = counts_s[counts_s < 2].index.tolist()
-    
+    if len(unique_values) != 2:
+        raise ValueError(f"Credit_scoring requiere target binario. Se encontraron {len(unique_values)} valores: {unique_values}")
+
+    _, class_counts = np.unique(y_array, return_counts=True)
+    if np.min(class_counts) < 2:
+        raise ValueError("Credit_scoring requiere al menos 2 registros por clase.")
+
     X_numeric = X.select_dtypes(include=[np.number]).copy()
     columnas_validas = X_numeric.columns[X_numeric.nunique() > 1]
     X_numeric = X_numeric[columnas_validas]
     if X_numeric.empty:
         raise ValueError("Credit_scoring requiere columnas numéricas no constantes.")
-
-    if clases_huerfanas:
-        mask_keep = ~y_series.isin(clases_huerfanas)
-        X_numeric = X_numeric[mask_keep.values]
-        y_array = y_series[mask_keep].to_numpy()
-        unique_values = np.sort(np.unique(y_array))
-
-    if len(unique_values) != 2:
-        raise ValueError(f"Credit_scoring requiere target binario con representatividad adecuada. Se encontraron {len(unique_values)} valores: {unique_values}")
-
-    _, class_counts = np.unique(y_array, return_counts=True)
-    if np.min(class_counts) < 2:
-        raise ValueError("Credit_scoring requiere al menos 2 registros por clase.")
 
     test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
