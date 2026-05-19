@@ -1,23 +1,17 @@
 import json
 import os
+import re
+import time
+import numpy as np
+from io import StringIO
 
-# --- CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES GCP ---
+# CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES
 path_credenciales = os.path.abspath(os.path.join(os.path.dirname(__file__), "credenciales", "BigQuery_credentials.json"))
 
 if os.path.exists(path_credenciales):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path_credenciales
 
-from google.cloud import storage, bigquery
-import requests
-import time
-import google.auth
-import google.auth.transport.requests
-import google.oauth2.id_token
-import re
-from io import StringIO
-
 import pandas as pd
-import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -41,85 +35,25 @@ from CODIGO.Funcionalidades import (
     iniciar_chat,
     interpretar_resultados,
     interpretar_resultados_perfilarDatos,
-    texto_a_dataframe
+    texto_a_dataframe,
+    subir_a_gcs,
+    tabla_existe_en_bq,
+    leer_cubo_de_bq,
+    esperar_tablas_bq,
+    llamar_build_cubo,
+    limpiar_dataset_anterior,
+    _resumen_tecnico_pipeline,
+    _metricas_dashboard,
+    _render_metricas_clave,
+    _formatear_metrica,
+    GCS_BUCKET,
+    PROJECT,
+    DATASET,
+    get_bq_client,
 )
 
 st.set_page_config(page_title="Autopilot", page_icon="⚡", layout="wide")
 load_css("styles.css")
-
-# --- CONFIGURACIÓN GCP ---
-GCS_BUCKET = "archivos_back"
-PROJECT    = "project-6d52cafa-4432-4186-aeb"
-DATASET    = "Cubo"
-CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
-
-def subir_a_gcs(archivo, carpeta):
-    client = get_storage_client()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(f"{carpeta}/{archivo.name}")
-    blob.upload_from_file(archivo, rewind=True)
-
-def tabla_existe_en_bq(tabla_id):
-    client = get_bq_client()
-    try:
-        client.get_table(f"{PROJECT}.{DATASET}.{tabla_id}")
-        return True
-    except Exception:
-        return False
-
-def leer_cubo_de_bq():
-    client = get_bq_client()
-    query = f"SELECT * FROM `{PROJECT}.{DATASET}.cubo_analitico`"
-    job_config = bigquery.QueryJobConfig()
-    return client.query(
-        query,
-        job_config=job_config,
-        location="northamerica-south1"
-    ).to_dataframe()
-
-def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
-    inicio = time.time()
-    while time.time() - inicio < timeout:
-        if all(tabla_existe_en_bq(t) for t in nombres_tablas):
-            return True
-        time.sleep(intervalo)
-    return False
-
-def llamar_build_cubo():
-    try:
-        import google.auth
-        import google.auth.transport.requests
-
-        credentials, project = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        auth_req = google.auth.transport.requests.Request()
-        credentials.refresh(auth_req)
-        
-        response = requests.post(
-            CF_URL,
-            headers={
-                "Authorization": f"Bearer {credentials.token}",
-                "Content-Type": "application/json"
-            }
-        )
-        return response.status_code == 200, response.json()
-    except Exception as e:
-        return False, str(e)
-
-def get_bq_client():
-    import google.auth
-    credentials, project = google.auth.default()
-    return bigquery.Client(
-        credentials=credentials,
-        project=PROJECT,
-        location="northamerica-south1"
-    )
-
-def get_storage_client():
-    import google.auth
-    credentials, project = google.auth.default()
-    return storage.Client(credentials=credentials, project=PROJECT)
 
 if "phase" not in st.session_state:
     st.session_state.phase = "CARGA"
@@ -151,12 +85,14 @@ if "last_uploaded_file" not in st.session_state:
     st.session_state.last_uploaded_file = None
 if "last_uploaded_dict" not in st.session_state:
     st.session_state.last_uploaded_dict = None
+if "proposal_update_notice" not in st.session_state:
+    st.session_state.proposal_update_notice = False
 
 
 st.title("  Data mining Autopilot ")
 st.text("Automatización del preprocesamiento de datos y entrenamiento de modelos de machine learning")
 
-# Navegación Lateral (Sidebar)
+
 opciones_nav = ["Carga de Datos"]
 if st.session_state.df is not None:
     opciones_nav.append("Propuesta")
@@ -270,7 +206,7 @@ if st.session_state.phase == "CARGA":
     st.markdown("<br>", unsafe_allow_html=True)
     col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
     with col_btn_center:
-        if st.button("🚀 Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
+        if st.button("Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
             try:
                 # Resetear estados de propuesta previos
                 st.session_state.proposal = None
@@ -279,10 +215,14 @@ if st.session_state.phase == "CARGA":
                 st.session_state.cleaner = None
                 st.session_state.messages_propuesta = []
                 st.session_state.messages_resultados = []
+                st.session_state.proposal_update_notice = False
                 st.session_state.chat_session = iniciar_chat()
                 st.session_state.chat_resultados_session = iniciar_chat()
 
-                # Paso 1: subir a GCS
+                with st.spinner("Preparando BigQuery y Cloud Storage..."):
+                    limpiar_dataset_anterior()
+                st.success("completado")
+
                 with st.spinner("Subiendo archivos a Cloud Storage..."):
                     subir_a_gcs(hechos, "Tabla_hechos")
                     if dimensiones:
@@ -290,7 +230,6 @@ if st.session_state.phase == "CARGA":
                             subir_a_gcs(dim, "Dimensiones")
                 st.success("Archivos subidos a Cloud Storage")
 
-                # Paso 2: esperar que el trigger cargue a BigQuery
                 nombres_esperados = ["hechos_raw"]
                 if dimensiones:
                     nombres_esperados += [
@@ -306,16 +245,25 @@ if st.session_state.phase == "CARGA":
                     st.stop()
                 st.success("Tablas cargadas en BigQuery")
 
-                # Paso 3: construir la vista
                 with st.spinner("Construyendo cubo analítico..."):
-                    ok, resultado = llamar_build_cubo()
-
-                if not ok:
-                    st.error(f"Error al construir el cubo: {resultado}")
-                    st.stop()
+                    if dimensiones:
+                        nombres_dims = [
+                            f"dim_{dim.name.split('.')[0].upper()}_raw"
+                            for dim in dimensiones
+                        ]
+                        ok, resultado = llamar_build_cubo(nombres_dims)
+                        if not ok:
+                            st.error(f"Error al construir el cubo: {resultado}")
+                            st.stop()
+                    else:
+                        client_bq = get_bq_client()
+                        client_bq.query(
+                            f"CREATE OR REPLACE VIEW `{PROJECT}.{DATASET}.cubo_analitico` AS "
+                            f"SELECT * FROM `{PROJECT}.{DATASET}.hechos_raw`",
+                            location="northamerica-south1"
+                        ).result()
                 st.success("Cubo construido con éxito")
 
-                # Paso 4: leer el cubo a dataframe para el resto del flujo
                 with st.spinner("Cargando datos para análisis..."):
                     st.session_state.df = leer_cubo_de_bq()
 
@@ -338,6 +286,13 @@ elif st.session_state.phase == "PROPUESTA":
                     diccionario_datos=st.session_state.data_dict_content
                 )
                 st.session_state.messages_propuesta.append({"role": "assistant", "content": initial_proposal})
+                st.session_state.proposal = initial_proposal
+        else:
+            if st.session_state.proposal is None:
+                for msg in reversed(st.session_state.messages_propuesta):
+                    if msg["role"] == "assistant":
+                        st.session_state.proposal = msg["content"]
+                        break
 
         json_str = "{}"
         for msg in reversed(st.session_state.messages_propuesta):
@@ -373,6 +328,9 @@ elif st.session_state.phase == "PROPUESTA":
                     diccionario_datos=st.session_state.data_dict_content
                 )
                 st.session_state.messages_propuesta.append({"role": "assistant", "content": response})
+                st.session_state.proposal = response
+                if re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL):
+                    st.session_state.proposal_update_notice = True
             st.rerun()
 
         st.markdown("---")
@@ -408,7 +366,6 @@ elif st.session_state.phase == "PROPUESTA":
             else:
                 st.error(f"Validacion del problema: {mensaje_validacion}")
 
-            # --- LIMPIEZA DE RESULTADOS PREVIOS AL CAMBIAR MODELO O REGLAS ---
             actual_reglas = conf_data.get("reglas_dict", {})
             if st.session_state.results is not None:
                 modelo_cambio = st.session_state.results.get("tipo_modelo") != modelo_seleccionado
@@ -422,28 +379,53 @@ elif st.session_state.phase == "PROPUESTA":
             puede_ejecutar = es_valido and MODELOS_DISPONIBLES[modelo_seleccionado]["implementado"]
 
             st.markdown("#### Tratamiento de nulos y columnas")
+            if st.session_state.get("proposal_update_notice"):
+                st.success("Las propuestas de limpieza fueron actualizadas correctamente.")
+
             if reglas_detectadas:
                 table_data = []
                 for col, params in reglas_detectadas.items():
                     params_validos = isinstance(params, dict)
                     metodo_usado = params.get("metodo", "AUTO") if params_validos else "AUTO"
-                    
-                    if str(metodo_usado).lower() in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
-                        tratamiento_str = "Imputación"
-                    elif str(metodo_usado).lower() == "drop-column":
+                    metodo_normalizado = str(metodo_usado).lower()
+
+                    if metodo_normalizado in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
+                        tratamiento_str = "Imputacion"
+                    elif metodo_normalizado == "drop-column":
                         tratamiento_str = "Eliminar Columna"
                     else:
-                        tratamiento_str = "Imputación"
-                    
+                        tratamiento_str = "Imputacion"
+
+                    if col in st.session_state.df.columns:
+                        if metodo_normalizado == "drop-column":
+                            conteo_datos = f"{len(st.session_state.df)} filas"
+                        elif params_validos and (
+                            params.get("Dummies") or params.get("TargetEncoding") or params.get("Ordinal") or params.get("WOE")
+                        ):
+                            conteo_datos = f"{st.session_state.df[col].nunique(dropna=True)} valores unicos"
+                        else:
+                            conteo_datos = f"{int(st.session_state.df[col].isna().sum())} nulos"
+                    else:
+                        conteo_datos = "Columna no encontrada"
+
                     table_data.append(
                         {
                             "Columna": col,
                             "Tratamiento": tratamiento_str,
-                            "Estado": "✅" if params_validos else "❌",
+                            "Estado": "Listo" if params_validos else "Revisar",
+                            "Conteo/Datos": conteo_datos,
                             "Dummies": "Si" if params_validos and params.get("Dummies") else "No",
                         }
                     )
                 st.table(pd.DataFrame(table_data))
+                with st.expander("Que significa esta tabla"):
+                    st.markdown(
+                        """
+                        - **Tratamiento:** accion que se aplicara a la columna, por ejemplo rellenar datos faltantes, eliminar una columna o transformar categorias.
+                        - **Estado:** indica si la propuesta esta lista para ejecutarse o si necesita revision porque la configuracion no se pudo interpretar bien.
+                        - **Conteo/Datos:** muestra cuantos registros o valores se veran afectados; por ejemplo, nulos por rellenar, filas asociadas a una eliminacion o valores unicos que se transformaran.
+                        """
+                    )
         except Exception as e:
             conf_data = {}
             puede_ejecutar = False
@@ -477,6 +459,7 @@ elif st.session_state.phase == "EJECUCION":
     conf = st.session_state.config_pipeline
     try:
         import os, shutil
+        tiempo_inicio_pipeline = time.time()
         if os.path.exists("Resultados"):
             shutil.rmtree("Resultados")
         if os.path.exists("MODELOS"):
@@ -557,7 +540,8 @@ elif st.session_state.phase == "EJECUCION":
                 "target": target,
                 "reglas": reglas,
                 "es_pca": es_pca,
-                "perfiles": perfiles
+                "perfiles": perfiles,
+                "tiempo_total_ejecucion": round(time.time() - tiempo_inicio_pipeline, 2)
             }
 
         st.session_state.phase = "RESULTADOS"
@@ -590,7 +574,7 @@ elif st.session_state.phase == "RESULTADOS":
             tab_text, tab_file = st.tabs(["Ingreso por Chat", "Subir Archivo"])
             
             with tab_text:
-                texto_pred = st.text_area("Describe el nuevo registro (ej. 'soy un pasajero de clase 2 hombre...'):")
+                texto_pred = st.text_area("Platícame una situación para predecirla:")
                 if st.button("Predecir desde texto", use_container_width=True):
                     if texto_pred:
                         with st.spinner("Interpretando texto y prediciendo..."):
@@ -643,7 +627,7 @@ elif st.session_state.phase == "RESULTADOS":
                                 
                                 df_res = df_n.copy()
                                 # Redondear predicciones si son numéricas
-                                if p.dtype.kind in 'fc': # float o complex
+                                if p.dtype.kind in 'fc':
                                     df_res['Prediccion'] = np.round(p.astype(float), 4)
                                 else:
                                     df_res['Prediccion'] = p
@@ -703,13 +687,26 @@ elif st.session_state.phase == "RESULTADOS":
                 st.session_state.messages_resultados.append({"role": "assistant", "content": explicacion})
                 st.rerun()
 
+        cleaner_actual = st.session_state.cleaner
+        resumen_pipeline = _resumen_tecnico_pipeline(res, cleaner_actual, st.session_state.df)
+        metricas_clave_dashboard = _metricas_dashboard(metricas_interfaz, es_clustering_resultado)
+        columnas_eliminadas = resumen_pipeline["columnas_eliminadas"]
+
+        _render_metricas_clave(metricas_clave_dashboard)
+
+        resumen_cols = st.columns(5)
+        resumen_cols[0].metric("Columnas usadas", _formatear_metrica(resumen_pipeline["columnas_usadas"]))
+        resumen_cols[1].metric("Columnas eliminadas", _formatear_metrica(len(columnas_eliminadas)))
+        resumen_cols[2].metric("Outliers tratados", _formatear_metrica(resumen_pipeline["outliers_corregidos"]))
+        resumen_cols[3].metric("Nulos tratados", _formatear_metrica(resumen_pipeline["nulos_tratados"]))
+        if resumen_pipeline["tiempo_total"] != "N/D":
+            resumen_cols[4].metric("Tiempo total", f"{resumen_pipeline['tiempo_total']} s")
 
         if es_clustering_resultado:
             metricas_cluster = metricas_interfaz
             st.markdown("#### Resultados de Clustering")
             st.write(f"**Algoritmo seleccionado:** {metricas_cluster.get('modelo_seleccionado')}")
             st.write(f"**Mejor numero de clusters:** {metricas_cluster.get('mejor_numero_clusters')}")
-            st.json(metricas_cluster.get("metricas_precision", {}))
 
             visualizaciones = metricas_cluster.get("visualizaciones", {})
             col_img1, col_img2 = st.columns(2)
@@ -729,7 +726,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_red = metricas_interfaz
                 st.markdown("#### Resultados de Redes Neuronales")
                 st.write(f"**Tipo de problema:** {metricas_red.get('tipo_problema')}")
-                st.json(metricas_red.get("metricas_precision", {}))
                 visualizaciones = metricas_red.get("visualizaciones", {})
                 col_nn1, col_nn2 = st.columns(2)
                 with col_nn1:
@@ -747,7 +743,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_knn = metricas_interfaz
                 st.markdown("#### Resultados de KNN")
                 st.write(f"**Tipo de problema:** {metricas_knn.get('tipo_problema')}")
-                st.json(metricas_knn.get("metricas_precision", {}))
                 visualizaciones = metricas_knn.get("visualizaciones", {})
                 col_knn1, col_knn2 = st.columns(2)
                 with col_knn1:
@@ -764,7 +759,6 @@ elif st.session_state.phase == "RESULTADOS":
                 st.markdown("#### Resultados de Arboles")
                 st.write(f"**Modelo seleccionado:** {metricas_arbol.get('modelo_seleccionado')}")
                 st.write(f"**Tipo de problema:** {metricas_arbol.get('tipo_problema')}")
-                st.json(metricas_arbol.get("metricas_precision", {}))
                 visualizaciones = metricas_arbol.get("visualizaciones", {})
                 col_tree1, col_tree2 = st.columns(2)
                 with col_tree1:
@@ -780,7 +774,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_log = metricas_interfaz
                 st.markdown("#### Resultados de Regresion Logistica")
                 st.write(f"**Tipo de problema:** {metricas_log.get('tipo_problema')}")
-                st.json(metricas_log.get("metricas_precision", {}))
                 visualizaciones = metricas_log.get("visualizaciones", {})
                 col_log1, col_log2 = st.columns(2)
                 with col_log1:
@@ -796,7 +789,6 @@ elif st.session_state.phase == "RESULTADOS":
                 metricas_credit = metricas_interfaz
                 st.markdown("#### Resultados de Credit Scoring")
                 st.write(f"**Tipo de problema:** {metricas_credit.get('tipo_problema')}")
-                st.json(metricas_credit.get("metricas_precision", {}))
                 visualizaciones = metricas_credit.get("visualizaciones", {})
                 col_credit1, col_credit2 = st.columns(2)
                 with col_credit1:
@@ -824,16 +816,18 @@ elif st.session_state.phase == "RESULTADOS":
         
         # Preparar contexto para la IA
         model_info = {
-            "tipo_modelo":   tipo_modelo,
-            "variable_obj":  res.get("target") if res.get("target") else "No requerida",
-            "metricas":      res["metricas"].get("metricas_precision", {}),
-            "n_registros":   len(st.session_state.df),
-            "n_features":    len(res["cols"]),
-            "clases":        res["metricas"].get("clases_detectadas", []),
-            "encodings":     [k for k, v in res.get("reglas", {}).items() if v.get("Dummies") or v.get("TargetEncoding") or v.get("Ordinal") or v.get("WOE")],
-            "pca_aplicado":  res.get("es_pca", False),
-            "grid_search":   True,
-            "perfilamiento_grupos": res.get("perfiles", {})
+            "tipo_modelo":           tipo_modelo,
+            "algoritmo_seleccionado": res["metricas"].get("modelo_seleccionado", ""),
+            "variable_obj":          res.get("target") if res.get("target") else "No requerida",
+            "metricas":              res["metricas"].get("metricas_precision", {}),
+            "coeficientes":          res["metricas"].get("coeficientes_por_variable", {}),
+            "n_registros":           len(st.session_state.df),
+            "n_features":            len(res["cols"]),
+            "clases":                res["metricas"].get("clases_detectadas", []),
+            "encodings":             [k for k, v in res.get("reglas", {}).items() if v.get("Dummies") or v.get("TargetEncoding") or v.get("Ordinal") or v.get("WOE")],
+            "pca_aplicado":          res.get("es_pca", False),
+            "grid_search":           True,
+            "perfilamiento_grupos":  res.get("perfiles", {})
         }
         context_prompt = build_model_context_prompt(model_info)
 
@@ -857,8 +851,6 @@ elif st.session_state.phase == "RESULTADOS":
         if user_input_res := st.chat_input("Pregunta dudas sobre el modelo, métricas o negocio...") or pregunta_chip:
             pregunta_final = user_input_res if user_input_res else pregunta_chip
             st.session_state.messages_resultados.append({"role": "user", "content": pregunta_final})
-            
-            # Mostrar el mensaje del usuario inmediatamente antes del stream
             with chat_container_res:
                 with st.chat_message("user"):
                     st.markdown(pregunta_final)

@@ -4,6 +4,13 @@ import google.generativeai as genai
 from google.api_core import exceptions
 import pandas as pd
 import streamlit as st
+import requests
+import time
+import numpy as np
+from google.cloud import storage, bigquery
+import google.auth
+import google.auth.transport.requests
+import google.oauth2.id_token
 
 from CODIGO.CleanData import Transformar_Df
 from CODIGO.MODELS import (
@@ -280,7 +287,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
 
     if is_initial:
         prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos.
+        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
         Guia tecnica interna: {guia_tecnica}
         Metadatos: {json.dumps(dtypes)}
         Valores nulos: {json.dumps(nulls)}
@@ -300,11 +307,14 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         - Columnas con separadores (genres, tags, keywords): Si ves "|" o muchos espacios en la muestra, DEBES usar "Lematizar": true. Prohibido usar Dummies aquí, a no ser que el usuario lo pida explícitamente.
         - Todas las columnas del dataset original deben aparecer en reglas_dict.
         
+        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+        - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+        
         6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
         """
     else:
         prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos.
+        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
         INSTRUCCIONES DEL USUARIO: "{feedback}"
         {dict_context}
         
@@ -318,26 +328,19 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         3. OBLIGATORIO: Al final incluye un nuevo bloque JSON válido con la configuración técnica actualizada (col_target, tipo_modelo, reglas_dict y EsPCA).
         
         SI SOLO HACE UNA PREGUNTA (o pide sugerencias/aclaraciones sin pedir cambios al plan):
-        1. Responde a su duda detalladamente enfocándote en negocio, datos y algoritmos.
+        1. Responde a su duda detalladamente enfocándote en negocio, datos and algoritmos.
         2. NO hables de código.
         {dict_instruction}
         3. MUY IMPORTANTE: NO incluyas ningún bloque JSON al final. De esta forma el sistema sabrá que no hay cambios técnicos.
+        
+        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+        - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
         """
 
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Propuesta Estratégica):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
     
     try:
         response = chat_session.send_message(prompt)
         
-        print("\n" + "="*60)
-        print("RESPUESTA DE LA IA (Propuesta Estratégica):")
-        print("="*60)
-        print(response.text)
-        print("="*60 + "\n")
         
         return response.text
     except exceptions.ResourceExhausted:
@@ -365,6 +368,7 @@ def chat_resultados_ia_stream(chat_session, mensaje_usuario, model_context_promp
 
 def build_model_context_prompt(model_info: dict) -> str:
     tipo        = model_info.get("tipo_modelo", "No especificado")
+    algoritmo   = model_info.get("algoritmo_seleccionado", "")
     target      = model_info.get("variable_obj", "No especificada")
     metricas    = model_info.get("metricas", {})
     n_reg       = model_info.get("n_registros", "—")
@@ -373,44 +377,114 @@ def build_model_context_prompt(model_info: dict) -> str:
     encodings   = model_info.get("encodings", [])
     pca         = model_info.get("pca_aplicado", False)
     grid        = model_info.get("grid_search", False)
+    coeficientes = model_info.get("coeficientes", {})
 
     metricas_str = "\n".join(f"    - {k}: {v}" for k, v in metricas.items()) if metricas else "    - No disponibles"
     clases_str   = ", ".join(str(c) for c in clases) if clases else "—"
     enc_str      = ", ".join(encodings) if encodings else "No especificados"
+    algoritmo_str = f"{tipo} → {algoritmo}" if algoritmo else tipo
 
-    return f"""Eres un asistente experto en Machine Learning integrado en "Data Mining Autopilot".
+    coef_str = ""
+    if coeficientes:
+        coef_str = "\n    Coeficientes por variable (caja blanca):\n"
+        coef_str += "\n".join(f"      · {k}: {v}" for k, v in coeficientes.items())
+        coef_str += "\n    (Un coeficiente positivo significa que al aumentar esa variable, el resultado sube; negativo = baja)"
+
+    advertencia_r2 = ""
+    r2_prueba = metricas.get("R2_prueba (conjunto de test)")
+    r2_train  = metricas.get("R2_entrenamiento (solo conjunto de entrenamiento)")
+    if r2_prueba is not None and r2_train is not None:
+        advertencia_r2 = f"""
+    ⚠️ DIFERENCIA IMPORTANTE ENTRE LAS MÉTRICAS DE R²:
+    - R²_prueba = {r2_prueba} → Este es el R² REAL. Mide qué tan bien predice el modelo en datos NUNCA VISTOS. Usa ESTE valor para tu titular.
+    - R²_entrenamiento = {r2_train} → Solo refleja qué tan bien memorizó el conjunto de entrenamiento. NO uses este para tu headline.
+    - Si R²_entrenamiento > R²_prueba hay un riesgo de sobreajuste (overfitting) que debes mencionar."""
+
+    return f"""Eres 'Autopilot', un Consultor Élite en Estrategia de IA y Negocios, experto en Machine Learning integrado en "Data Mining Autopilot".
     Tu misión es ayudar al usuario a entender e interpretar el modelo recién entrenado.
+
+    INSTRUCCIONES PARA EL "EFECTO WOW" (TRADUCCIÓN A NEGOCIO):
+¡Prohibido sonar como un libro de texto de estadística! Traduce cada métrica técnica a su equivalente financiero u operativo usando esta guía de pensamiento:
 
     ════════════════════════════════════════
     CONTEXTO DEL MODELO ENTRENADO
     ════════════════════════════════════════
-      Tipo de modelo       : {tipo}
-      Variable objetivo    : {target}
-      Clases (si aplica)   : {clases_str}
-      Registros            : {n_reg}
-      Features usadas      : {n_feat}
-      Encodings aplicados  : {enc_str}
-      PCA aplicado         : {"Sí" if pca else "No"}
-      GridSearchCV usado   : {"Sí" if grid else "No"}
+      Tipo / Algoritmo usado : {algoritmo_str}
+      Variable objetivo      : {target}
+      Clases (si aplica)     : {clases_str}
+      Registros              : {n_reg}
+      Features usadas        : {n_feat}
+      Encodings aplicados    : {enc_str}
+      PCA aplicado           : {"Sí" if pca else "No"}
+      GridSearchCV usado     : {"Sí" if grid else "No"}
 
       Métricas obtenidas:
     {metricas_str}
+    {advertencia_r2}
+    {coef_str}
     ════════════════════════════════════════
 
     INSTRUCCIONES:
       1. Responde siempre en español, de forma clara y útil.
-      2. Traduce métricas técnicas a lenguaje de negocio.
-      3. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
-      4. Sé conciso pero completo.
+      2. Menciona explícitamente el nombre del algoritmo/modelo usado.
+      3. Usa ÚNICAMENTE R²_prueba (conjunto de test) para tu titular y narrativa. NUNCA uses R²_entrenamiento como medida de rendimiento real.
+      4. Si hay coeficientes, úsalos para explicar qué variables mueven más el resultado y en qué dirección.
+      5. Traduce métricas técnicas a lenguaje de negocio.
+      6. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
+      7. Sé conciso pero completo.
+      8. Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+    
+    ESTRUCTURA OBLIGATORIA DE LA RESPUESTA:
+    1. El Titular WOW: Una sola frase de alto impacto que resuma el mayor beneficio del modelo para el negocio (Ej: "Nuestra nueva herramienta predictiva nos permite capturar el 85% de las fugas de clientes antes de que ocurran").
+    2. La Historia del Desempeño: Explica los resultados basándote en la guía de traducción anterior. Conecta los números con escenarios de la vida real (ventas, ahorros, mitigación de riesgos).
+    3. Recomendación Estratégica: ¿Qué decisión se debe tomar MAÑANA con esta herramienta? ¿Cómo sugerimos implementarla en la operación diaria? 
+    
     """
 
 def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
+    algoritmo = metricas_interfaz.get("modelo_seleccionado", "")
+    tipo_modelo = metricas_interfaz.get("tipo_modelo", "")
+    algoritmo_str = f"{tipo_modelo} → {algoritmo}" if algoritmo else tipo_modelo
+
+    r2_prueba = metricas_interfaz.get("metricas_precision", {}).get("R2_prueba (conjunto de test)")
+    r2_train  = metricas_interfaz.get("metricas_precision", {}).get("R2_entrenamiento (solo conjunto de entrenamiento)")
+    advertencia_r2 = ""
+    if r2_prueba is not None and r2_train is not None:
+        advertencia_r2 = f"IMPORTANTE: R²_prueba={r2_prueba} es el valor REAL (datos nunca vistos). R²_entrenamiento={r2_train} solo refleja la memorización. Tu titular debe basarse en R²_prueba."
+
+    coeficientes = metricas_interfaz.get("coeficientes_por_variable", {})
+    coef_str = ""
+    if coeficientes:
+        coef_str = "Coeficientes del modelo (caja blanca): " + ", ".join(f"{k}={v}" for k, v in coeficientes.items() if k != "_intercepto")
+
     interp_prompt = f"""
-    Actua como un Consultor de Data Science Senior
-    Resultados: {json.dumps(metricas_interfaz)}
-    Variables usadas: {cols}
-    Tarea: {tarea}
-    Concluye con una recomendacion estrategica.
+    Actúa como 'Autopilot', un Consultor Élite en Estrategia de IA y Negocios. Tu objetivo es generar un "Efecto WOW", traduciendo métricas de evaluación de modelos predictivos en impacto real y tangible para directivos que no tienen perfil técnico.
+
+    MODELO USADO: {algoritmo_str if algoritmo_str else "Ver tipo_modelo en JSON"}
+    CONTEXTO DEL MODELO:
+    Resultados de las métricas (JSON): {json.dumps(metricas_interfaz)}
+    Variables que impulsan el modelo: {cols}
+    Objetivo de Negocio / Tarea: {tarea}
+    {advertencia_r2}
+    {coef_str}
+
+    INSTRUCCIONES PARA EL "EFECTO WOW" (TRADUCCIÓN A NEGOCIO):
+    ¡Prohibido sonar como un libro de texto de estadística! Traduce cada métrica técnica a su equivalente financiero u operativo usando esta guía de pensamiento:
+    - Accuracy (Exactitud): Preséntalo como la "Certeza Operativa". ¿Qué tanta confianza puede tener el negocio en esta herramienta?
+    - Precision (Precisión): Tradúcelo como "Eficiencia de Recursos / ROI". De cada 100 veces que el modelo sugiere invertir tiempo o dinero, ¿cuántas damos en el blanco sin desperdiciar recursos (Falsos Positivos)?
+    - Recall (Exhaustividad): Tradúcelo como "Captura de Oportunidades o Prevención de Riesgos". Del total del pastel que hay en el mercado (o el total de fraudes/fallos), ¿qué porcentaje estamos logrando "atrapar" para que no se escape (Falsos Negativos)?
+    - RMSE / MAE (Errores): Tradúcelos como el "Margen de Desviación Financiera/Operativa".
+
+    ESTRUCTURA OBLIGATORIA DE LA RESPUESTA:
+    1. El Titular WOW: Una sola frase de alto impacto que resuma el mayor beneficio del modelo para el negocio (Ej: "Nuestra nueva herramienta predictiva nos permite capturar el 85% de las fugas de clientes antes de que ocurran").
+    2. La Historia del Desempeño: Explica los resultados basándote en la guía de traducción anterior. Conecta los números con escenarios de la vida real (ventas, ahorros, mitigación de riesgos).
+    3. El Motor del Modelo: Menciona brevemente, en lenguaje sencillo, cuáles son las 2 o 3 variables principales ({cols}) que están moviendo la aguja. Si hay coeficientes disponibles, explica la dirección del efecto ("a mayor X, el resultado sube/baja").
+    4. Recomendación Estratégica: ¿Qué decisión se debe tomar MAÑANA con esta herramienta? ¿Cómo sugerimos implementarla en la operación diaria?
+
+    REGLA DE IDENTIDAD Y FIRMA (ESTRICTAMENTE OBLIGATORIO):
+    - Tienes totalmente prohibido presentarte como una IA. 
+    - Si decides firmar tu respuesta al inicio, al final, o hacer referencia a ti mismo, hazlo única y exclusivamente como "Autopilot". 
+    - Ejemplo de firma permitida: "Atentamente, Autopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Interpretación de Resultados")
 
@@ -421,7 +495,7 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     perfiles_acotados = {k: v for k, v in perfiles.items()} # Evitar saturar contexto si es muy grande
     
     interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior y Estratega de Negocios.
+    Actúa como 'Autopilot', un Estratega de Negocios de Alto Nivel y Experto en Data Storytelling. Tu objetivo es traducir resultados de modelos de datos en narrativas de negocio accionables, empáticas y completamente libres de jerga técnica, dirigidas a tomadores de decisiones (CEOs, Marketing, Ventas).
     
     CONTEXTO TÉCNICO:
     Resultados del modelo: {json.dumps(metricas_interfaz)}
@@ -432,33 +506,25 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     
     TAREA ESPECÍFICA:
     {tarea}
+    Convierte estos grupos estadísticos en "Arquetipos de Cliente/Negocio". Debes contar una historia con los datos, dándole a cada grupo una identidad clara y humana que resuene con directivos no técnicos.
     
-    INSTRUCCIÓN ADICIONAL:
-    "Después de que aplique un algoritmo de clustering/clasificación obtuve las siguientes métricas relacionadas a cada clase, quiero que me ayudes a perfilar mis clases, dándoles nombres cortos y creativos que generalicen cada clase encontrada basándote en sus estadísticas."
+    REGLAS PARA EL DATA STORYTELLING (ESTRATEGIA Y PERFILAMIENTO):
+    1. Tono: Ejecutivo, persuasivo y comercial. CERO jerga técnica (prohibido usar palabras como "clusters", "dispersión", "p-values" o "variables" en la narrativa).
+    2. Para CADA grupo encontrado, estructura tu respuesta exactamente así:
+   - Nombre del Arquetipo: Un título corto, creativo y memorable (ej. "Los Exploradores Digitales", "El Motor de Rentabilidad").
+   - La Historia: Un párrafo narrativo que describa quiénes son en el mundo real, cómo se comportan y qué los motiva, basado estrictamente en sus datos estadísticos.
+   - El Respaldo: 2 o 3 viñetas con los datos clave que los definen, pero traducidos a lenguaje de negocio (ej. "Tienen el ticket de compra más alto" en lugar de "mean_spending = 85.4").
+   - Plan de Acción: Una recomendación estratégica clara. ¿Cómo los monetizamos, fidelizamos o qué riesgo mitigamos en este segmento?
     
-    REGLAS DE RESPUESTA:
-    1. Usa un tono ejecutivo y estratégico.
-    2. Para cada grupo, presenta su nombre sugerido y una breve justificación basada en los datos.
-    3. Concluye con una recomendación de acción para cada segmento.
-    - Nombres/Identificadores: SIEMPRE propone borrar ("metodo": "drop-column") columnas como IDs, Nombres, Apellidos, RUT, DNI, etc., ya que no aportan valor predictivo, a menos que el usuario indique lo contrario.
-    - Lematización estratégica: Observa las muestras de datos. Si una columna categórica contiene frases, etiquetas separadas por espacios (ej: "acción drama terror") o descripciones largas, DEBES proponer "Lematizar": true.
+    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
+    - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Perfilamiento de Datos")
 
 def _enviar_mensaje_ia(chat_session, prompt, titulo_log):
-    print("\n" + "="*60)
-    print(f"PROMPT ENVIADO A LA IA ({titulo_log}):")
-    print("="*60)
-    print(prompt[:1000] + "..." if len(prompt) > 1000 else prompt)
-    print("="*60 + "\n")
     
     response = chat_session.send_message(prompt)
     
-    print("\n" + "="*60)
-    print(f"RESPUESTA DE LA IA ({titulo_log}):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
     
     return response.text
 
@@ -476,20 +542,9 @@ def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
     2. Si un dato no se menciona en absoluto y no se puede inferir, usa null para rellenarlo (el pipeline se encargará de imputarlo).
     3. Devuelve ÚNICAMENTE un bloque de código JSON válido donde las claves son los nombres de las columnas.
     """
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
-    
+
     response = chat_session.send_message(prompt)
-    
-    print("\n" + "="*60)
-    print("RESPUESTA DE LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
-    
+
     import re
     json_match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
     if json_match:
@@ -503,3 +558,198 @@ def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
             
     datos_json = json.loads(json_str)
     return pd.DataFrame([datos_json])
+
+# --- CONFIGURACIÓN GCP ---
+GCS_BUCKET = "archivos_back"
+PROJECT    = "project-6d52cafa-4432-4186-aeb"
+DATASET    = "Cubo"
+CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
+
+def limpiar_dataset_anterior():
+    client = get_bq_client()
+    gcs    = get_storage_client()
+    tablas = client.list_tables(f"{PROJECT}.{DATASET}")
+    for tabla in tablas:
+        if tabla.table_id.endswith("_raw") or tabla.table_id == "cubo_analitico":
+            client.delete_table(f"{PROJECT}.{DATASET}.{tabla.table_id}", not_found_ok=True)
+    bucket = gcs.bucket(GCS_BUCKET)
+    for carpeta in ["Tabla_hechos", "Dimensiones"]:
+        for blob in list(bucket.list_blobs(prefix=f"{carpeta}/")):
+            blob.delete()
+
+def subir_a_gcs(archivo, carpeta):
+    client = get_storage_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(f"{carpeta}/{archivo.name}")
+    blob.upload_from_file(archivo, rewind=True)
+
+def tabla_existe_en_bq(tabla_id):
+    client = get_bq_client()
+    try:
+        client.get_table(f"{PROJECT}.{DATASET}.{tabla_id}")
+        return True
+    except Exception:
+        return False
+
+def leer_cubo_de_bq():
+    client = get_bq_client()
+    query = f"SELECT * FROM `{PROJECT}.{DATASET}.cubo_analitico`"
+    job_config = bigquery.QueryJobConfig()
+    return client.query(
+        query,
+        job_config=job_config,
+        location="northamerica-south1"
+    ).to_dataframe()
+
+def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        if all(tabla_existe_en_bq(t) for t in nombres_tablas):
+            return True
+        time.sleep(intervalo)
+    return False
+
+def llamar_build_cubo(nombres_dims=None):
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        
+        response = requests.post(
+            CF_URL,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json"
+            },
+            json={"dimensiones": nombres_dims or []}
+        )
+        return response.status_code == 200, response.json()
+    except Exception as e:
+        return False, str(e)
+
+def get_bq_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return bigquery.Client(
+        credentials=credentials,
+        project=PROJECT,
+        location="northamerica-south1"
+    )
+
+def get_storage_client():
+    import google.auth
+    credentials, project = google.auth.default()
+    return storage.Client(credentials=credentials, project=PROJECT)
+
+def _normalizar_clave_metrica(clave):
+    return str(clave).lower().replace("_", "").replace("-", "").replace(" ", "")
+
+def _obtener_metrica(metricas, nombres):
+    if not isinstance(metricas, dict):
+        return None
+    objetivo = {_normalizar_clave_metrica(n) for n in nombres}
+    for clave, valor in metricas.items():
+        if _normalizar_clave_metrica(clave) in objetivo:
+            return valor
+    return None
+
+def _formatear_metrica(valor):
+    if valor is None:
+        return "N/D"
+    if isinstance(valor, (int, np.integer)):
+        return f"{int(valor):,}"
+    if isinstance(valor, (float, np.floating)):
+        return f"{float(valor):,.4f}"
+    return str(valor)
+
+def _tipo_resultado_dashboard(metricas, es_clustering):
+    tipo = str(metricas.get("tipo_problema", "")).lower() if isinstance(metricas, dict) else ""
+    if es_clustering:
+        return "clustering"
+    if "regresion" in tipo or "regression" in tipo:
+        return "regresion"
+    if "forecast" in tipo or "sarima" in tipo:
+        return "forecasting"
+    return "clasificacion"
+
+def _metricas_dashboard(metricas, es_clustering):
+    metricas_precision = metricas.get("metricas_precision", {}) if isinstance(metricas, dict) else {}
+    tipo = _tipo_resultado_dashboard(metricas, es_clustering)
+
+    if tipo == "clustering":
+        return [
+            ("Silhouette Score", _obtener_metrica(metricas_precision, ["Silhouette Score", "silhouette"])),
+            ("Davies Bouldin", _obtener_metrica(metricas_precision, ["Davies-Bouldin Index", "Davies Bouldin"])),
+            ("Numero de clusters", metricas.get("mejor_numero_clusters") or metricas.get("n_clusters")),
+        ]
+    if tipo == "regresion":
+        return [
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+            ("R²", _obtener_metrica(metricas_precision, ["R2", "R²"])),
+        ]
+    if tipo == "forecasting":
+        return [
+            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
+            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
+            ("MSE", _obtener_metrica(metricas_precision, ["MSE"])),
+            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
+        ]
+    return [
+        ("Accuracy", _obtener_metrica(metricas_precision, ["Accuracy"])),
+        ("Precision", _obtener_metrica(metricas_precision, ["Precision"])),
+        ("Recall", _obtener_metrica(metricas_precision, ["Recall"])),
+        ("F1 Score", _obtener_metrica(metricas_precision, ["F1-Score", "F1", "F1 Score"])),
+        ("ROC-AUC", _obtener_metrica(metricas_precision, ["ROC-AUC", "ROC AUC"])),
+        ("PR-AUC", _obtener_metrica(metricas_precision, ["PR-AUC", "PR AUC"])),
+    ]
+
+def _contar_logs(logs, patrones):
+    total = 0
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        if any(p in accion for p in patrones):
+            total += 1
+    return total
+
+def _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales):
+    eliminadas = set(columnas_originales) - set(columnas_finales)
+    for log in logs:
+        accion = str(log.get("accion", "")).lower()
+        col = log.get("columna")
+        if col and col != "__dataset__" and ("eliminacion_columna" in accion or "borrada" in accion):
+            eliminadas.add(col)
+    return sorted(eliminadas)
+
+def _resumen_tecnico_pipeline(res, cleaner, df_original):
+    logs = getattr(cleaner, "logs_limpieza", []) if cleaner is not None else []
+    columnas_originales = list(df_original.columns) if df_original is not None else []
+    columnas_finales = list(getattr(cleaner, "df", pd.DataFrame()).columns) if cleaner is not None else []
+    columnas_usadas = res.get("cols", [])
+    eliminadas = _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales + [res.get("target")])
+
+    return {
+        "columnas_originales": len(columnas_originales),
+        "columnas_usadas": len(columnas_usadas),
+        "columnas_eliminadas": eliminadas,
+        "nulos_tratados": _contar_logs(logs, ["imputacion", "eliminacion_filas_nulas"]),
+        "outliers_corregidos": _contar_logs(logs, ["outliers_recortados"]),
+        "categoricas_codificadas": _contar_logs(logs, ["dummies", "target_encoding", "ordinal_encoding", "woe"]),
+        "tiempo_total": res.get("tiempo_total_ejecucion", "N/D"),
+        "logs": logs,
+    }
+
+def _render_metricas_clave(metricas_filtradas):
+    visibles = [(nombre, valor) for nombre, valor in metricas_filtradas if valor is not None]
+    if not visibles:
+        return
+    for inicio in range(0, len(visibles), 4):
+        cols_metricas = st.columns(min(4, len(visibles) - inicio))
+        for col_ui, (nombre, valor) in zip(cols_metricas, visibles[inicio:inicio + 4]):
+            col_ui.metric(nombre, _formatear_metrica(valor))

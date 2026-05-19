@@ -2,9 +2,9 @@ import numpy as np
 import json
 import joblib
 from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
-from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso, ElasticNet
 from sklearn.metrics import (mean_squared_error, mean_absolute_error, mean_absolute_percentage_error, r2_score,
-                             accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
+                             accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score,
                              silhouette_score, davies_bouldin_score, pairwise_distances, confusion_matrix,
                              ConfusionMatrixDisplay, RocCurveDisplay)
 from sklearn.feature_selection import SelectKBest, f_regression, f_classif
@@ -20,6 +20,7 @@ import warnings
 from uuid import uuid4
 import os
 import matplotlib as mpl
+import pandas as pd
 
 APP_COLORS = {
     'primary': '#00F2FE',
@@ -54,110 +55,169 @@ def _redondear_dict(d, precision=4):
     else:
         return d
 
+def _validar_dataset_supervisado(X, y, nombre_modelo, min_samples=6):
+    if y is None:
+        raise ValueError(f"{nombre_modelo} requiere una variable objetivo.")
+    if X is None or X.empty:
+        raise ValueError(f"{nombre_modelo} requiere variables predictoras.")
+    if len(X) != len(y):
+        raise ValueError(f"{nombre_modelo} recibio X e y con longitudes distintas.")
+    if len(X) < min_samples:
+        raise ValueError(f"{nombre_modelo} requiere al menos {min_samples} registros para entrenar y validar.")
+
+def _test_size_seguro(n_samples, test_size):
+    if n_samples < 10:
+        return max(1 / n_samples, min(0.4, test_size))
+    return test_size
+
+def _mape_seguro(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    mask = np.abs(y_true) > 1e-8
+    if not np.any(mask):
+        return None
+    return float(mean_absolute_percentage_error(y_true[mask], y_pred[mask]))
+
+def _auc_seguro(y_true, y_score, multi_class=False):
+    try:
+        if multi_class:
+            return float(roc_auc_score(y_true, y_score, multi_class="ovr", average="weighted"))
+        return float(roc_auc_score(y_true, y_score))
+    except Exception:
+        return None
+
+def _pr_auc_seguro(y_true_binary, y_score):
+    try:
+        return float(average_precision_score(y_true_binary, y_score))
+    except Exception:
+        return None
+
 def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lineal.pkl', seed=123, p_value_threshold=0.05):
+    _validar_dataset_supervisado(X, y, "Regresion_lineal", min_samples=6)
     X = X.select_dtypes(include=[np.number]).copy()
     if X.empty:
         raise ValueError("Regresión lineal requiere columnas numéricas.")
- 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=seed)
 
+    y_array = np.asarray(y, dtype=float)
+    test_size = _test_size_seguro(len(X), test_size)
+    X_train, X_test, y_train, y_test = train_test_split(X, y_array, test_size=test_size, random_state=seed)
 
     columnas_validas = X_train.columns[X_train.nunique() > 1]
-    
-    if len(columnas_validas) < len(X_train.columns):
-        columnas_eliminadas = set(X_train.columns) - set(columnas_validas)   
     X_train = X_train[columnas_validas]
     X_test = X_test[columnas_validas]
+    if X_train.empty:
+        raise ValueError("Regresion_lineal requiere columnas numericas no constantes.")
 
     kb = SelectKBest(k="all", score_func=f_regression)
     kb.fit(X_train, y_train)
-    
-    mascara_significativas = kb.pvalues_ < p_value_threshold
-    columnas_significativas = X_train.columns[mascara_significativas].tolist()
-    
-    # Fallback de seguridad
-    if len(columnas_significativas) == 0:
-        print(f"Advertencia: Ninguna variable cumplió el umbral p<{p_value_threshold}. Seleccionando las 3 mejores.")
-        kb_fallback = SelectKBest(k=min(3, X.shape[1]), score_func=f_regression)
-        kb_fallback.fit(X_train, y_train)
-        columnas_significativas = X_train.columns[kb_fallback.get_support()].tolist()
+    pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
+    columnas_significativas = X_train.columns[pvalues < p_value_threshold].tolist()
+
+    if len(columnas_significativas) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_significativas = X_train.columns[indices_ordenados[:top_k]].tolist()
 
     X_train_sel = X_train[columnas_significativas]
     X_test_sel = X_test[columnas_significativas]
+    cv_seguro = _cv_seguro(y_train, False, cv_folds)
 
+    candidatos = [
+        ("LinearRegression", LinearRegression(), {"fit_intercept": [True, False]}),
+        ("Ridge", Ridge(random_state=seed), {"alpha": [0.01, 0.1, 1.0, 10.0, 100.0], "fit_intercept": [True, False]}),
+        ("Lasso", Lasso(random_state=seed, max_iter=10000), {"alpha": [0.001, 0.01, 0.1, 1.0], "fit_intercept": [True, False]}),
+        ("ElasticNet", ElasticNet(random_state=seed, max_iter=10000), {"alpha": [0.001, 0.01, 0.1, 1.0], "l1_ratio": [0.2, 0.5, 0.8], "fit_intercept": [True, False]})
+    ]
 
-    y_min = np.nanmin(y_train)
-    if y_min > -1:
-        modelo_base = TransformedTargetRegressor(
-            regressor=LinearRegression(),
-            func=np.log1p,
-            inverse_func=np.expm1
-        )
-        parametros = {
-            'regressor__fit_intercept': [True, False],
-            'regressor__copy_X': [True, False]
-        }
-    else:
-        modelo_base = LinearRegression()
-        parametros = {
-            'fit_intercept': [True, False],
-            'copy_X': [True, False]
-        }
-    
-    grid_search = GridSearchCV(estimator=modelo_base, param_grid=parametros, 
-                               scoring='neg_mean_squared_error', cv=cv_folds, n_jobs=-1)
+    if np.nanmin(y_train) > -1:
+        candidatos.append((
+            "LinearRegression_LogTarget",
+            TransformedTargetRegressor(regressor=LinearRegression(), func=np.log1p, inverse_func=np.expm1),
+            {"regressor__fit_intercept": [True, False]}
+        ))
 
-    grid_search.fit(X_train_sel, y_train)
+    busquedas = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for nombre, estimador, parametros in candidatos:
+            grid = GridSearchCV(estimator=estimador, param_grid=parametros, scoring='r2', cv=cv_seguro, n_jobs=-1)
+            grid.fit(X_train_sel, y_train)
+            busquedas.append((nombre, grid))
+
+    nombre_mejor, grid_search = sorted(busquedas, key=lambda item: item[1].best_score_, reverse=True)[0]
     mejor_modelo = grid_search.best_estimator_
-
-
-    # 4. Predicciones y Métricas de Precisión
-    # Score en Entrenamiento (Train)
-    score=mejor_modelo.score(X_train_sel, y_train)
-    
-    # Score en Prueba (Test)
+    score_train = mejor_modelo.score(X_train_sel, y_train)
     y_pred = mejor_modelo.predict(X_test_sel)
 
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_test, y_pred)
-    mape = mean_absolute_percentage_error(y_test, y_pred)
+    mape = _mape_seguro(y_test, y_pred)
     r2_test = r2_score(y_test, y_pred)
 
-    cv_scores = cross_val_score(mejor_modelo, X_train_sel, y_train, cv=cv_folds, scoring='r2', n_jobs=-1)
+    cv_scores = cross_val_score(mejor_modelo, X_train_sel, y_train, cv=cv_seguro, scoring='r2', n_jobs=-1)
     cv_r2_mean = cv_scores.mean()
     cv_r2_std = cv_scores.std()
     model_path = _ruta_con_id_unico(model_filename)
+    image_prefix = _obtener_image_prefix(model_path)
+    real_vs_pred_path = _guardar_real_vs_pred(y_test, y_pred, image_prefix)
+
+    estimador_base = mejor_modelo.regressor_ if hasattr(mejor_modelo, 'regressor_') else mejor_modelo
+    coeficientes_dict = {}
+    if hasattr(estimador_base, 'coef_'):
+        coef = np.asarray(estimador_base.coef_).flatten()
+        intercept = float(estimador_base.intercept_) if hasattr(estimador_base, 'intercept_') else 0.0
+        coeficientes_dict = {col: round(float(c), 4) for col, c in zip(columnas_significativas, coef)}
+        coeficientes_dict["_intercepto"] = round(intercept, 4)
 
     resultados = {
+        "tipo_modelo": "Regresion_lineal",
+        "modelo_seleccionado": nombre_mejor,
+        "tipo_problema": "regresion",
         "seleccion_variables": {
             "cantidad_original": X.shape[1],
             "cantidad_final": len(columnas_significativas),
             "variables_utilizadas": columnas_significativas
         },
         "metricas_precision": {
-            "modelo.score": float(score),
-            "R2": float(r2_test),
+            "R2_prueba (conjunto de test)": float(r2_test),
+            "R2_entrenamiento (solo conjunto de entrenamiento)": float(score_train),
             "MSE": float(mse),
             "RMSE": float(rmse),
             "MAE": float(mae),
-            "MAPE": float(mape)
+            "MAPE": float(mape) if mape is not None else None
         },
+        "coeficientes_por_variable": coeficientes_dict,
         "cross_validation_train_R2": {
             "media": float(cv_r2_mean),
             "desviacion_estandar": float(cv_r2_std),
-            "folds": cv_folds
+            "folds": cv_seguro
+        },
+        "visualizaciones": {
+            "real_vs_prediccion": real_vs_pred_path
+        },
+        "validacion": {
+            "test_size": test_size,
+            "cv_folds": cv_seguro,
+            "comparacion_modelos": [
+                {
+                    "modelo": nombre,
+                    "mejor_score_r2": float(grid.best_score_),
+                    "mejores_hiperparametros": grid.best_params_
+                }
+                for nombre, grid in busquedas
+            ]
         },
         "mejores_hiperparametros": grid_search.best_params_,
         "ruta_modelo_guardado": model_path
     }
-    
+
     resultados = _redondear_dict(resultados)
     json_resultado = json.dumps(resultados, indent=4, ensure_ascii=False)
-
     paquete_modelo = {
         "modelo": mejor_modelo,
-        "columnas": columnas_significativas
+        "columnas": columnas_significativas,
+        "resultados": resultados
     }
     joblib.dump(paquete_modelo, model_path)
 
@@ -212,22 +272,32 @@ def _guardar_coeficientes_logisticos(modelo, columnas, image_prefix):
 def _guardar_arbol_visual(modelo, columnas, image_prefix, class_names=None):
     path = f"{image_prefix}_tree.png"
     modelo_para_plot = modelo.estimators_[0] if hasattr(modelo, "estimators_") else modelo
-    plt.figure(figsize=(22, 12))
+    
+    # Guardar color original del texto y cambiarlo temporalmente a negro
+    original_text_color = mpl.rcParams.get('text.color', '#E0E0E0')
+    mpl.rcParams['text.color'] = 'black'
+    
+    plt.figure(figsize=(16, 10)) # Más compacto para acercar la visualización
     plot_tree(
         modelo_para_plot,
         feature_names=columnas,
         class_names=class_names,
         filled=True,
         rounded=True,
-        max_depth=4
+        max_depth=3, # Profundidad controlada para acercar y hacer más legible
+        fontsize=10 # Tamaño de fuente legible
     )
-    plt.title("Árbol de decisión" if not hasattr(modelo, "estimators_") else "Árbol representativo del RandomForest")
+    plt.title("Árbol de decisión" if not hasattr(modelo, "estimators_") else "Árbol representativo del RandomForest", color='white')
     plt.tight_layout()
-    plt.savefig(path)
+    plt.savefig(path, facecolor='#0E1117') # Conservar el fondo oscuro de la interfaz
     plt.close()
+    
+    # Restaurar color original del texto
+    mpl.rcParams['text.color'] = original_text_color
     return path
 
 def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol.pkl', seed=123, p_value_threshold=0.05):
+    _validar_dataset_supervisado(X, y, "Arbol_decision", min_samples=6)
     if y is None:
         raise ValueError("Arbol_decision requiere una variable objetivo.")
 
@@ -242,17 +312,29 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     unique_values = np.sort(np.unique(y_array))
 
     if es_clf:
+        y_series = pd.Series(y_array)
+        counts_s = y_series.value_counts()
+        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
+        if clases_huerfanas:
+            mask_keep = ~y_series.isin(clases_huerfanas)
+            X_numeric = X_numeric[mask_keep.values]
+            y_array = y_series[mask_keep].to_numpy()
+            unique_values = np.sort(np.unique(y_array))
+        
         _, class_counts = np.unique(y_array, return_counts=True)
+        if len(class_counts) < 2:
+            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con árboles requiere al menos 2 registros por clase.")
         stratify = y_array
         score_func = f_classif
-        scoring = "accuracy"
+        scoring = "f1_weighted"
     else:
         stratify = None
         score_func = f_regression
         scoring = "r2"
 
+    test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
         y_array,
@@ -264,14 +346,12 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     kb = SelectKBest(k="all", score_func=score_func)
     kb.fit(X_train, y_train)
     pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
-    mascara_significativas = pvalues < p_value_threshold
-    columnas_significativas = X_train.columns[mascara_significativas].tolist()
+    columnas_significativas = X_train.columns[pvalues < p_value_threshold].tolist()
 
-    if len(columnas_significativas) == 0:
-        k_fallback = min(5, X_train.shape[1])
-        kb_fallback = SelectKBest(k=k_fallback, score_func=score_func)
-        kb_fallback.fit(X_train, y_train)
-        columnas_significativas = X_train.columns[kb_fallback.get_support()].tolist()
+    if len(columnas_significativas) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_significativas = X_train.columns[indices_ordenados[:top_k]].tolist()
 
     X_train_sel = X_train[columnas_significativas]
     X_test_sel = X_test[columnas_significativas]
@@ -284,19 +364,20 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
                 DecisionTreeClassifier(random_state=seed),
                 {
                     "criterion": ["gini", "entropy"],
-                    "max_depth": [None, 5, 10],
-                    "min_samples_split": [2, 5],
-                    "min_samples_leaf": [1, 2]
+                    "max_depth": [None, 4, 6, 10],
+                    "min_samples_split": [2, 5, 10],
+                    "min_samples_leaf": [1, 2, 4]
                 }
             ),
             (
                 "RandomForestClassifier",
                 RandomForestClassifier(random_state=seed, n_jobs=-1),
                 {
-                    "n_estimators": [100],
+                    "n_estimators": [100, 200],
                     "criterion": ["gini", "entropy"],
-                    "max_depth": [None, 5, 10],
-                    "min_samples_leaf": [1, 2]
+                    "max_depth": [None, 5, 10, 15],
+                    "min_samples_split": [2, 5, 10],
+                    "min_samples_leaf": [1, 2, 4]
                 }
             )
         ]
@@ -307,19 +388,20 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
                 DecisionTreeRegressor(random_state=seed),
                 {
                     "criterion": ["squared_error", "absolute_error"],
-                    "max_depth": [None, 5, 10],
-                    "min_samples_split": [2, 5],
-                    "min_samples_leaf": [1, 2]
+                    "max_depth": [None, 4, 6, 10],
+                    "min_samples_split": [2, 5, 10],
+                    "min_samples_leaf": [1, 2, 4]
                 }
             ),
             (
                 "RandomForestRegressor",
                 RandomForestRegressor(random_state=seed, n_jobs=-1),
                 {
-                    "n_estimators": [100],
+                    "n_estimators": [100, 200],
                     "criterion": ["squared_error"],
-                    "max_depth": [None, 5, 10],
-                    "min_samples_leaf": [1, 2]
+                    "max_depth": [None, 5, 10, 15],
+                    "min_samples_split": [2, 5, 10],
+                    "min_samples_leaf": [1, 2, 4]
                 }
             )
         ]
@@ -339,6 +421,8 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     nombre_mejor, grid_search = sorted(busquedas, key=lambda item: item[1].best_score_, reverse=True)[0]
     mejor_modelo = grid_search.best_estimator_
     y_pred = mejor_modelo.predict(X_test_sel)
+    train_score = mejor_modelo.score(X_train_sel, y_train)
+    test_score = mejor_modelo.score(X_test_sel, y_test)
 
     model_path = _ruta_con_id_unico(model_filename)
     image_prefix = _obtener_image_prefix(model_path)
@@ -367,9 +451,11 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
 
         y_prob = mejor_modelo.predict_proba(X_test_sel)
         if len(unique_values) == 2:
-            auc = roc_auc_score(y_test, y_prob[:, 1])
+            auc = _auc_seguro(y_test, y_prob[:, 1])
+            pr_auc = _pr_auc_seguro((y_test == unique_values[-1]).astype(int), y_prob[:, 1])
         else:
-            auc = roc_auc_score(y_test, y_prob, multi_class="ovr", average="weighted")
+            auc = _auc_seguro(y_test, y_prob, multi_class=True)
+            pr_auc = None
 
         confusion_path, matriz = _guardar_matriz_confusion(y_test, y_pred, unique_values, image_prefix)
         visualizaciones["matriz_confusion"] = confusion_path
@@ -383,7 +469,8 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
                 "Precision": float(prec),
                 "Recall": float(rec),
                 "F1-Score": float(f1),
-                "ROC-AUC": float(auc)
+                "ROC-AUC": float(auc) if auc is not None else None,
+                "PR-AUC": float(pr_auc) if pr_auc is not None else None
             },
             "matriz_confusion": matriz.tolist(),
             "visualizaciones": visualizaciones
@@ -392,6 +479,8 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
         r2 = r2_score(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         mae = mean_absolute_error(y_test, y_pred)
+        mape = _mape_seguro(y_test, y_pred)
+        real_vs_pred_path = _guardar_real_vs_pred(y_test, y_pred, image_prefix)
         resultados = {
             "tipo_modelo": "Arbol_decision",
             "modelo_seleccionado": nombre_mejor,
@@ -399,9 +488,10 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
             "metricas_precision": {
                 "R2": float(r2),
                 "RMSE": float(rmse),
-                "MAE": float(mae)
+                "MAE": float(mae),
+                "MAPE": float(mape) if mape is not None else None
             },
-            "visualizaciones": visualizaciones
+            "visualizaciones": {**visualizaciones, "real_vs_prediccion": real_vs_pred_path}
         }
 
     resultados.update({
@@ -414,6 +504,9 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
             "test_size": test_size,
             "cv_folds": cv_seguro,
             "mejor_score_grid": float(grid_search.best_score_),
+            "score_train": float(train_score),
+            "score_test": float(test_score),
+            "brecha_train_test": float(train_score - test_score),
             "comparacion_modelos": [
                 {
                     "modelo": nombre,
@@ -439,17 +532,16 @@ def Arbol_decision(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_arbol
     return json.dumps(resultados, indent=4, ensure_ascii=False), mejor_modelo, columnas_significativas
 
 def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_logistico.pkl', seed=123, p_value_threshold=0.05):
+    _validar_dataset_supervisado(X, y, "Regresion_logistica", min_samples=6)
     if y is None:
         raise ValueError("Regresion_logistica requiere una variable objetivo.")
 
     y_array = np.asarray(y)
     unique_values = np.sort(np.unique(y_array))
-    if len(unique_values) != 2:
-        raise ValueError(f"La Regresión Logística requiere una variable objetivo binaria (2 valores). Se encontraron {len(unique_values)} valores: {unique_values}")
-
-    _, class_counts = np.unique(y_array, return_counts=True)
-    if np.min(class_counts) < 2:
-        raise ValueError("Regresión logística requiere al menos 2 registros por clase.")
+    
+    y_series = pd.Series(y_array)
+    counts_s = y_series.value_counts()
+    clases_huerfanas = counts_s[counts_s < 2].index.tolist()
     
     X_numeric = X.select_dtypes(include=[np.number]).copy()
     columnas_validas = X_numeric.columns[X_numeric.nunique() > 1]
@@ -457,6 +549,20 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     if X_numeric.empty:
         raise ValueError("Regresión logística requiere columnas numéricas no constantes.")
 
+    if clases_huerfanas:
+        mask_keep = ~y_series.isin(clases_huerfanas)
+        X_numeric = X_numeric[mask_keep.values]
+        y_array = y_series[mask_keep].to_numpy()
+        unique_values = np.sort(np.unique(y_array))
+
+    if len(unique_values) != 2:
+        raise ValueError(f"La Regresión Logística requiere una variable objetivo binaria (2 valores con >= 2 registros). Se encontraron {len(unique_values)} valores: {unique_values}")
+
+    _, class_counts = np.unique(y_array, return_counts=True)
+    if np.min(class_counts) < 2:
+        raise ValueError("Regresión logística requiere al menos 2 registros por clase.")
+    
+    test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
         y_array,
@@ -467,16 +573,13 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
 
     kb = SelectKBest(k="all", score_func=f_classif)
     kb.fit(X_train, y_train)
-    
     pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
-    mascara_significativas = pvalues < p_value_threshold
-    columnas_significativas = X_train.columns[mascara_significativas].tolist()
-    
-    if len(columnas_significativas) == 0:
-        print(f"Advertencia: Ninguna variable cumplió el umbral p<{p_value_threshold}. Seleccionando las 3 mejores.")
-        kb_fallback = SelectKBest(k=min(5, X_train.shape[1]), score_func=f_classif)
-        kb_fallback.fit(X_train, y_train)
-        columnas_significativas = X_train.columns[kb_fallback.get_support()].tolist()
+    columnas_significativas = X_train.columns[pvalues < p_value_threshold].tolist()
+
+    if len(columnas_significativas) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_significativas = X_train.columns[indices_ordenados[:top_k]].tolist()
 
     X_train_sel = X_train[columnas_significativas]
     X_test_sel = X_test[columnas_significativas]
@@ -518,7 +621,8 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
     prec = precision_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
     rec = recall_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
     f1 = f1_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
-    auc = roc_auc_score(y_test, y_prob)
+    auc = _auc_seguro(y_test, y_prob)
+    pr_auc = _pr_auc_seguro((y_test == pos_label).astype(int), y_prob)
 
     model_path = _ruta_con_id_unico(model_filename)
     image_prefix = _obtener_image_prefix(model_path)
@@ -539,7 +643,8 @@ def Regresion_logistica(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_
             "Precision": float(prec),
             "Recall": float(rec),
             "F1-Score": float(f1),
-            "ROC-AUC": float(auc)
+            "ROC-AUC": float(auc) if auc is not None else None,
+            "PR-AUC": float(pr_auc) if pr_auc is not None else None
         },
         "matriz_confusion": matriz.tolist(),
         "visualizaciones": {
@@ -608,7 +713,8 @@ def _calcular_metricas_clustering(X, labels, centers=None):
         "Distancia Manhattan Media": None
     }
 
-    if len(X_eval) == 0 or len(np.unique(labels_eval)) < 2:
+    n_labels = len(np.unique(labels_eval))
+    if len(X_eval) == 0 or n_labels < 2 or n_labels >= len(X_eval):
         return metricas
 
     metricas["Silhouette Score"] = float(silhouette_score(X_eval, labels_eval))
@@ -721,6 +827,8 @@ def _guardar_visualizaciones_clustering(X, labels, inercias_codo, k_values, imag
 def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_filename='modelo_clustering.pkl', seed=123, n_clusters_fix=None):
     if X is None or X.empty:
         raise ValueError("Clustering requiere al menos una matriz X con columnas numéricas.")
+    if y is not None:
+        warnings.warn("Clustering_optimizacion ignora y porque es un modelo no supervisado.", RuntimeWarning)
 
     X_numeric = X.select_dtypes(include=[np.number]).copy()
     if X_numeric.empty:
@@ -732,7 +840,10 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
         raise ValueError("Clustering requiere al menos 3 registros.")
 
     if n_clusters_fix is not None:
-        k_values = [int(n_clusters_fix)]
+        k_fijo = int(n_clusters_fix)
+        if k_fijo < 2 or k_fijo >= n_samples:
+            raise ValueError("n_clusters debe estar entre 2 y n_registros - 1.")
+        k_values = [k_fijo]
     else:
         max_k = min(max_clusters, n_samples - 1)
         min_k = min(min_clusters, max_k)
@@ -854,7 +965,10 @@ def Clustering_optimizacion(X, y=None, min_clusters=2, max_clusters=10, model_fi
         "tipo_modelo": "Clustering_optimizacion",
         "modelo_seleccionado": mejor["algoritmo"],
         "mejor_numero_clusters": int(mejor["k"]),
-        "metricas_precision": mejor["metricas"],
+        "metricas_precision": {
+            **mejor["metricas"],
+            "Ruido/Outliers DBSCAN": int(np.sum(mejor["labels"] == -1)) if mejor["algoritmo"] == "DBSCAN" else 0
+        },
         "metricas_por_algoritmo": metricas_por_algoritmo,
         "metodo_codo": {
             "k_values": [int(k) for k in k_values],
@@ -898,12 +1012,12 @@ def _cv_seguro(y_train, es_clasificacion, cv_folds):
         _, counts = np.unique(y_train, return_counts=True)
         folds = min(cv_folds, int(counts.min()))
         if folds < 2:
-            raise ValueError("Redes neuronales requiere al menos 2 registros por clase en entrenamiento para validar.")
+            raise ValueError("El modelo requiere al menos 2 registros por clase en entrenamiento para validacion cruzada.")
         return folds
 
     folds = min(cv_folds, len(y_train) // 2)
     if folds < 2:
-        raise ValueError("Redes neuronales requiere más registros para validación cruzada.")
+        raise ValueError("El modelo requiere mas registros para validacion cruzada.")
     return folds
 
 def _guardar_curva_perdida(modelo, image_prefix):
@@ -956,6 +1070,7 @@ def _guardar_real_vs_pred(y_test, y_pred, image_prefix):
     return real_vs_pred_path
 
 def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_redes_neuronales.pkl', seed=123):
+    _validar_dataset_supervisado(X, y, "Redes_neuronales", min_samples=12)
     if y is None:
         raise ValueError("Redes_neuronales requiere una variable objetivo.")
 
@@ -972,11 +1087,22 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
     image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
+        y_series = pd.Series(y_array)
+        counts_s = y_series.value_counts()
+        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
+        if clases_huerfanas:
+            mask_keep = ~y_series.isin(clases_huerfanas)
+            X_numeric = X_numeric[mask_keep.values]
+            y_array = y_series[mask_keep].to_numpy()
+        
         _, class_counts = np.unique(y_array, return_counts=True)
+        if len(class_counts) < 2:
+            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con redes neuronales requiere al menos 2 registros por clase.")
 
     stratify = y_array if es_clf and np.min(np.unique(y_array, return_counts=True)[1]) >= 2 else None
+    test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
         y_array,
@@ -985,24 +1111,41 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
         stratify=stratify
     )
 
+    # Selección de variables significativas para Redes Neuronales
+    score_func = f_classif if es_clf else f_regression
+    kb = SelectKBest(k="all", score_func=score_func)
+    kb.fit(X_train, y_train)
+    pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
+    p_value_threshold = 0.05
+    columnas_sel = X_train.columns[pvalues < p_value_threshold]
+
+    if len(columnas_sel) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_sel = X_train.columns[indices_ordenados[:top_k]]
+
+    columnas_validas = columnas_sel
+    X_train = X_train[columnas_validas]
+    X_test = X_test[columnas_validas]
+
     cv_seguro = _cv_seguro(y_train, es_clf, cv_folds)
 
     if es_clf:
-        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, max_iter=1500)
+        modelo_base = MLPClassifier(random_state=seed, early_stopping=True, validation_fraction=0.15, max_iter=2000)
         parametros = {
-            "hidden_layer_sizes": [(32,), (64,), (32, 16)],
+            "hidden_layer_sizes": [(16,), (32,), (64,), (32, 16), (64, 32)],
             "activation": ["relu", "tanh"],
-            "alpha": [0.0001, 0.001],
-            "learning_rate_init": [0.001, 0.01]
+            "alpha": [0.0001, 0.001, 0.01],
+            "learning_rate_init": [0.0005, 0.001, 0.01]
         }
-        scoring = "accuracy"
+        scoring = "f1_weighted"
     else:
-        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, max_iter=1500)
+        modelo_base = MLPRegressor(random_state=seed, early_stopping=True, validation_fraction=0.15, max_iter=2000)
         parametros = {
-            "hidden_layer_sizes": [(32,), (64,), (32, 16)],
+            "hidden_layer_sizes": [(16,), (32,), (64,), (32, 16), (64, 32)],
             "activation": ["relu", "tanh"],
-            "alpha": [0.0001, 0.001],
-            "learning_rate_init": [0.001, 0.01]
+            "alpha": [0.0001, 0.001, 0.01],
+            "learning_rate_init": [0.0005, 0.001, 0.01]
         }
         scoring = "neg_root_mean_squared_error"
 
@@ -1037,15 +1180,18 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
             rec = recall_score(y_test, y_pred, average=average_mode, zero_division=0)
             f1 = f1_score(y_test, y_pred, average=average_mode, zero_division=0)
 
-        y_prob = mejor_modelo.predict_proba(X_test)
-        if len(unique_values) == 2:
-            auc = roc_auc_score(y_test, y_prob[:, 1])
-            roc_path = _guardar_roc(y_test, y_prob[:, 1], image_prefix)
-        else:
-            auc = roc_auc_score(y_test, y_prob, multi_class="ovr", average="weighted")
-            roc_path = None
-
         confusion_path, matriz = _guardar_matriz_confusion(y_test, y_pred, unique_values, image_prefix)
+        roc_path = None
+        auc = None
+        pr_auc = None
+        if hasattr(mejor_modelo, "predict_proba"):
+            y_prob = mejor_modelo.predict_proba(X_test)
+            if len(unique_values) == 2:
+                auc = _auc_seguro(y_test, y_prob[:, 1])
+                pr_auc = _pr_auc_seguro((y_test == unique_values[-1]).astype(int), y_prob[:, 1])
+                roc_path = _guardar_roc(y_test, y_prob[:, 1], image_prefix)
+            else:
+                auc = _auc_seguro(y_test, y_prob, multi_class=True)
 
         resultados = {
             "tipo_modelo": "Redes_neuronales",
@@ -1055,7 +1201,8 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
                 "Precision": float(prec),
                 "Recall": float(rec),
                 "F1-Score": float(f1),
-                "ROC-AUC": float(auc)
+                "ROC-AUC": float(auc) if auc is not None else None,
+                "PR-AUC": float(pr_auc) if pr_auc is not None else None
             },
             "matriz_confusion": matriz.tolist(),
             "visualizaciones": {
@@ -1082,6 +1229,7 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
         r2 = r2_score(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         mae = mean_absolute_error(y_test, y_pred)
+        mape = _mape_seguro(y_test, y_pred)
         real_vs_pred_path = _guardar_real_vs_pred(y_test, y_pred, image_prefix)
 
         resultados = {
@@ -1090,7 +1238,8 @@ def Redes_neuronales(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_red
             "metricas_precision": {
                 "R2": float(r2),
                 "RMSE": float(rmse),
-                "MAE": float(mae)
+                "MAE": float(mae),
+                "MAPE": float(mape) if mape is not None else None
             },
             "visualizaciones": {
                 "curva_roc": None,
@@ -1167,6 +1316,7 @@ def _comparar_distancias_knn(X_train, X_test, y_train, y_test, es_clf, k_values,
     return comparacion, errores_por_distancia
 
 def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', seed=123):
+    _validar_dataset_supervisado(X, y, "KNN", min_samples=6)
     if y is None:
         raise ValueError("KNN requiere una variable objetivo.")
 
@@ -1176,6 +1326,8 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
 
     if X_numeric.empty:
         raise ValueError("KNN requiere columnas numéricas no constantes.")
+    if X_numeric.shape[1] > max(50, len(X_numeric) // 2):
+        raise ValueError("KNN no es adecuado con demasiadas dimensiones frente al numero de registros. Usa PCA o seleccion de variables.")
 
     y_array = np.asarray(y)
     es_clf = _es_clasificacion(y_array)
@@ -1183,13 +1335,24 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
     image_prefix = _obtener_image_prefix(model_path)
 
     if es_clf:
+        y_series = pd.Series(y_array)
+        counts_s = y_series.value_counts()
+        clases_huerfanas = counts_s[counts_s < 2].index.tolist()
+        if clases_huerfanas:
+            mask_keep = ~y_series.isin(clases_huerfanas)
+            X_numeric = X_numeric[mask_keep.values]
+            y_array = y_series[mask_keep].to_numpy()
+        
         _, class_counts = np.unique(y_array, return_counts=True)
+        if len(class_counts) < 2:
+            raise ValueError("El dataset filtrado requiere al menos 2 clases distintas con representatividad suficiente.")
         if np.min(class_counts) < 2:
             raise ValueError("Clasificación con KNN requiere al menos 2 registros por clase.")
         stratify = y_array
     else:
         stratify = None
 
+    test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
         y_array,
@@ -1198,11 +1361,28 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
         stratify=stratify
     )
 
+    # Selección de variables significativas para KNN
+    score_func = f_classif if es_clf else f_regression
+    kb = SelectKBest(k="all", score_func=score_func)
+    kb.fit(X_train, y_train)
+    pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
+    p_value_threshold = 0.05
+    columnas_sel = X_train.columns[pvalues < p_value_threshold]
+
+    if len(columnas_sel) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_sel = X_train.columns[indices_ordenados[:top_k]]
+
+    columnas_validas = columnas_sel
+    X_train = X_train[columnas_validas]
+    X_test = X_test[columnas_validas]
+
     max_neighbors = min(15, len(X_train))
     if max_neighbors < 1:
         raise ValueError("KNN requiere más registros de entrenamiento.")
 
-    k_values = sorted(set([k for k in [1, 3, 5, 7, 9, 11, 15] if k <= max_neighbors]))
+    k_values = sorted(set([k for k in [1, 2, 3, 5, 7, 9, 11, 15] if k <= max_neighbors]))
     if not k_values:
         k_values = [1]
 
@@ -1262,6 +1442,14 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
             f1 = f1_score(y_test, y_pred, average=average_mode, zero_division=0)
 
         confusion_path, matriz = _guardar_matriz_confusion(y_test, y_pred, unique_values, image_prefix)
+        roc_path = None
+        auc = None
+        pr_auc = None
+        if len(unique_values) == 2 and hasattr(mejor_modelo, "predict_proba"):
+            y_prob = mejor_modelo.predict_proba(X_test)[:, 1]
+            auc = _auc_seguro(y_test, y_prob)
+            pr_auc = _pr_auc_seguro((y_test == unique_values[-1]).astype(int), y_prob)
+            roc_path = _guardar_roc(y_test, y_prob, image_prefix)
 
         resultados = {
             "tipo_modelo": "KNN",
@@ -1270,12 +1458,15 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
                 "Accuracy": float(acc),
                 "Precision": float(prec),
                 "Recall": float(rec),
-                "F1-Score": float(f1)
+                "F1-Score": float(f1),
+                "ROC-AUC": float(auc) if auc is not None else None,
+                "PR-AUC": float(pr_auc) if pr_auc is not None else None
             },
             "matriz_confusion": matriz.tolist(),
             "comparacion_distancias": comparacion_distancias,
             "visualizaciones": {
                 "error_vs_k": error_vs_k_path,
+                "curva_roc": roc_path,
                 "matriz_confusion": confusion_path,
                 "real_vs_prediccion": None
             },
@@ -1296,6 +1487,7 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
         r2 = r2_score(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         mae = mean_absolute_error(y_test, y_pred)
+        mape = _mape_seguro(y_test, y_pred)
         real_vs_pred_path = _guardar_real_vs_pred(y_test, y_pred, image_prefix)
 
         resultados = {
@@ -1304,7 +1496,8 @@ def KNN_model(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_knn.pkl', 
             "metricas_precision": {
                 "R2": float(r2),
                 "RMSE": float(rmse),
-                "MAE": float(mae)
+                "MAE": float(mae),
+                "MAPE": float(mape) if mape is not None else None
             },
             "comparacion_distancias": comparacion_distancias,
             "visualizaciones": {
@@ -1393,24 +1586,37 @@ def _guardar_roc_credit(y_true_binary, y_prob, image_prefix):
     return roc_path
 
 def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credit_scoring.pkl', seed=123, p_value_threshold=0.05):
+    _validar_dataset_supervisado(X, y, "Credit_scoring", min_samples=10)
     if y is None:
         raise ValueError("Credit_scoring requiere una variable objetivo binaria.")
 
     y_array = np.asarray(y)
     unique_values = np.sort(np.unique(y_array))
-    if len(unique_values) != 2:
-        raise ValueError(f"Credit_scoring requiere target binario. Se encontraron {len(unique_values)} valores: {unique_values}")
-
-    _, class_counts = np.unique(y_array, return_counts=True)
-    if np.min(class_counts) < 2:
-        raise ValueError("Credit_scoring requiere al menos 2 registros por clase.")
-
+    
+    y_series = pd.Series(y_array)
+    counts_s = y_series.value_counts()
+    clases_huerfanas = counts_s[counts_s < 2].index.tolist()
+    
     X_numeric = X.select_dtypes(include=[np.number]).copy()
     columnas_validas = X_numeric.columns[X_numeric.nunique() > 1]
     X_numeric = X_numeric[columnas_validas]
     if X_numeric.empty:
         raise ValueError("Credit_scoring requiere columnas numéricas no constantes.")
 
+    if clases_huerfanas:
+        mask_keep = ~y_series.isin(clases_huerfanas)
+        X_numeric = X_numeric[mask_keep.values]
+        y_array = y_series[mask_keep].to_numpy()
+        unique_values = np.sort(np.unique(y_array))
+
+    if len(unique_values) != 2:
+        raise ValueError(f"Credit_scoring requiere target binario con representatividad adecuada. Se encontraron {len(unique_values)} valores: {unique_values}")
+
+    _, class_counts = np.unique(y_array, return_counts=True)
+    if np.min(class_counts) < 2:
+        raise ValueError("Credit_scoring requiere al menos 2 registros por clase.")
+
+    test_size = _test_size_seguro(len(X_numeric), test_size)
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric,
         y_array,
@@ -1423,10 +1629,11 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     kb.fit(X_train, y_train)
     pvalues = np.nan_to_num(kb.pvalues_, nan=1.0)
     columnas_score = X_train.columns[pvalues < p_value_threshold].tolist()
-    if len(columnas_score) == 0:
-        kb_fallback = SelectKBest(k=min(10, X_train.shape[1]), score_func=f_classif)
-        kb_fallback.fit(X_train, y_train)
-        columnas_score = X_train.columns[kb_fallback.get_support()].tolist()
+
+    if len(columnas_score) < 3:
+        top_k = min(3, X_train.shape[1])
+        indices_ordenados = np.argsort(pvalues)
+        columnas_score = X_train.columns[indices_ordenados[:top_k]].tolist()
 
     X_train_sel = X_train[columnas_score]
     X_test_sel = X_test[columnas_score]
@@ -1462,11 +1669,13 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
     y_prob = probas[:, 1]
 
     auc = roc_auc_score(y_test_binary, y_prob)
+    pr_auc = _pr_auc_seguro(y_test_binary, y_prob)
     gini = float(2 * auc - 1)
     ks = _ks_statistic(y_test_binary, y_prob)
     acc = accuracy_score(y_test, y_pred)
     prec = precision_score(y_test, y_pred, pos_label=positive_label, zero_division=0)
     rec = recall_score(y_test, y_pred, pos_label=positive_label, zero_division=0)
+    f1 = f1_score(y_test, y_pred, pos_label=positive_label, zero_division=0)
 
     eps = 1e-6
     odds = np.clip(y_prob, eps, 1 - eps) / np.clip(1 - y_prob, eps, 1 - eps)
@@ -1513,9 +1722,11 @@ def Credit_scoring(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_credi
             "KS statistic": float(ks),
             "Gini": float(gini),
             "ROC-AUC": float(auc),
+            "PR-AUC": float(pr_auc) if pr_auc is not None else None,
             "Accuracy": float(acc),
             "Precision": float(prec),
-            "Recall": float(rec)
+            "Recall": float(rec),
+            "F1-Score": float(f1)
         },
         "scorecard": {
             "base_score": base_score,
