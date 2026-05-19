@@ -5,7 +5,7 @@ import time
 import numpy as np
 from io import StringIO
 
-# --- CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES GCP ---
+# CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES
 path_credenciales = os.path.abspath(os.path.join(os.path.dirname(__file__), "credenciales", "BigQuery_credentials.json"))
 
 if os.path.exists(path_credenciales):
@@ -87,7 +87,7 @@ if "proposal_update_notice" not in st.session_state:
 st.title("  Data mining Autopilot ")
 st.text("Automatización del preprocesamiento de datos y entrenamiento de modelos de machine learning")
 
-# Navegación Lateral (Sidebar)
+
 opciones_nav = ["Carga de Datos"]
 if st.session_state.df is not None:
     opciones_nav.append("Propuesta")
@@ -201,7 +201,7 @@ if st.session_state.phase == "CARGA":
     st.markdown("<br>", unsafe_allow_html=True)
     col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
     with col_btn_center:
-        if st.button("🚀 Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
+        if st.button("Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
             try:
                 # Resetear estados de propuesta previos
                 st.session_state.proposal = None
@@ -214,7 +214,6 @@ if st.session_state.phase == "CARGA":
                 st.session_state.chat_session = iniciar_chat()
                 st.session_state.chat_resultados_session = iniciar_chat()
 
-                # Paso 1: subir a GCS
                 with st.spinner("Subiendo archivos a Cloud Storage..."):
                     subir_a_gcs(hechos, "Tabla_hechos")
                     if dimensiones:
@@ -222,7 +221,6 @@ if st.session_state.phase == "CARGA":
                             subir_a_gcs(dim, "Dimensiones")
                 st.success("Archivos subidos a Cloud Storage")
 
-                # Paso 2: esperar que el trigger cargue a BigQuery
                 nombres_esperados = ["hechos_raw"]
                 if dimensiones:
                     nombres_esperados += [
@@ -238,7 +236,6 @@ if st.session_state.phase == "CARGA":
                     st.stop()
                 st.success("Tablas cargadas en BigQuery")
 
-                # Paso 3: construir la vista
                 with st.spinner("Construyendo cubo analítico..."):
                     ok, resultado = llamar_build_cubo()
 
@@ -247,7 +244,6 @@ if st.session_state.phase == "CARGA":
                     st.stop()
                 st.success("Cubo construido con éxito")
 
-                # Paso 4: leer el cubo a dataframe para el resto del flujo
                 with st.spinner("Cargando datos para análisis..."):
                     st.session_state.df = leer_cubo_de_bq()
 
@@ -350,7 +346,6 @@ elif st.session_state.phase == "PROPUESTA":
             else:
                 st.error(f"Validacion del problema: {mensaje_validacion}")
 
-            # --- LIMPIEZA DE RESULTADOS PREVIOS AL CAMBIAR MODELO O REGLAS ---
             actual_reglas = conf_data.get("reglas_dict", {})
             if st.session_state.results is not None:
                 modelo_cambio = st.session_state.results.get("tipo_modelo") != modelo_seleccionado
@@ -612,7 +607,7 @@ elif st.session_state.phase == "RESULTADOS":
                                 
                                 df_res = df_n.copy()
                                 # Redondear predicciones si son numéricas
-                                if p.dtype.kind in 'fc': # float o complex
+                                if p.dtype.kind in 'fc':
                                     df_res['Prediccion'] = np.round(p.astype(float), 4)
                                 else:
                                     df_res['Prediccion'] = p
@@ -834,8 +829,6 @@ elif st.session_state.phase == "RESULTADOS":
         if user_input_res := st.chat_input("Pregunta dudas sobre el modelo, métricas o negocio...") or pregunta_chip:
             pregunta_final = user_input_res if user_input_res else pregunta_chip
             st.session_state.messages_resultados.append({"role": "user", "content": pregunta_final})
-            
-            # Mostrar el mensaje del usuario inmediatamente antes del stream
             with chat_container_res:
                 with st.chat_message("user"):
                     st.markdown(pregunta_final)

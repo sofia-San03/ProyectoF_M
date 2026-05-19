@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import numpy as np
 import unicodedata
 import warnings
@@ -531,8 +531,6 @@ class Transformar_Df:
         # Guardar tipos de datos originales de entrenamiento para la inferencia
         self.dtypes_entrenamiento = {col: str(dtype) for col, dtype in self.df.dtypes.items()}
         
-        print("Reglas de Entrada:")
-        print(reglas_dict)
         self.df, logs_prevalidacion = pre_validar_columnas(self.df)
         self.logs_limpieza.extend(logs_prevalidacion)
         try:
@@ -708,8 +706,6 @@ class Transformar_Df:
             componentes = self.pca.fit_transform(self.df)
             self.df = pd.DataFrame(componentes, columns=[f'PC{i+1}' for i in range(n_comp)], index=self.df.index)
         
-        print("Reglas Finales:")
-        print(reporte)
         return reporte
 
     def transformar_nueva_tupla(self, nuevo_df):

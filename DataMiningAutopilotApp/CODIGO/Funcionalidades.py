@@ -308,8 +308,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         - Todas las columnas del dataset original deben aparecer en reglas_dict.
         
         REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
-        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
+        - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
         
         6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
         """
@@ -335,24 +334,13 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         3. MUY IMPORTANTE: NO incluyas ningún bloque JSON al final. De esta forma el sistema sabrá que no hay cambios técnicos.
         
         REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
-        - Si vas a presentarte firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
+        - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
         """
 
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Propuesta Estratégica):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
     
     try:
         response = chat_session.send_message(prompt)
         
-        print("\n" + "="*60)
-        print("RESPUESTA DE LA IA (Propuesta Estratégica):")
-        print("="*60)
-        print(response.text)
-        print("="*60 + "\n")
         
         return response.text
     except exceptions.ResourceExhausted:
@@ -393,8 +381,11 @@ def build_model_context_prompt(model_info: dict) -> str:
     clases_str   = ", ".join(str(c) for c in clases) if clases else "—"
     enc_str      = ", ".join(encodings) if encodings else "No especificados"
 
-    return f"""Eres un asistente experto en Machine Learning integrado en "Data Mining Autopilot".
+    return f"""Eres 'Autopilot', un Consultor Élite en Estrategia de IA y Negocios, experto en Machine Learning integrado en "Data Mining Autopilot".
     Tu misión es ayudar al usuario a entender e interpretar el modelo recién entrenado.
+
+    INSTRUCCIONES PARA EL "EFECTO WOW" (TRADUCCIÓN A NEGOCIO):
+¡Prohibido sonar como un libro de texto de estadística! Traduce cada métrica técnica a su equivalente financiero u operativo usando esta guía de pensamiento:
 
     ════════════════════════════════════════
     CONTEXTO DEL MODELO ENTRENADO
@@ -417,20 +408,41 @@ def build_model_context_prompt(model_info: dict) -> str:
       2. Traduce métricas técnicas a lenguaje de negocio.
       3. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
       4. Sé conciso pero completo.
-      5. Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+      5. Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+    
+    ESTRUCTURA OBLIGATORIA DE LA RESPUESTA:
+    1. El Titular WOW: Una sola frase de alto impacto que resuma el mayor beneficio del modelo para el negocio (Ej: "Nuestra nueva herramienta predictiva nos permite capturar el 85% de las fugas de clientes antes de que ocurran").
+    2. La Historia del Desempeño: Explica los resultados basándote en la guía de traducción anterior. Conecta los números con escenarios de la vida real (ventas, ahorros, mitigación de riesgos).
+    3. Recomendación Estratégica: ¿Qué decisión se debe tomar MAÑANA con esta herramienta? ¿Cómo sugerimos implementarla en la operación diaria? 
+    
     """
 
 def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
     interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior llamado Autopilot.
-    Resultados: {json.dumps(metricas_interfaz)}
-    Variables usadas: {cols}
-    Tarea: {tarea}
-    Concluye con una recomendación estratégica.
-    
-    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
-    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+    Actúa como 'Autopilot', un Consultor Élite en Estrategia de IA y Negocios. Tu objetivo es generar un "Efecto WOW", traduciendo métricas de evaluación de modelos predictivos en impacto real y tangible para directivos que no tienen perfil técnico.
+
+    CONTEXTO DEL MODELO:
+    Resultados de las métricas (JSON): {json.dumps(metricas_interfaz)}
+    Variables que impulsan el modelo: {cols}
+    Objetivo de Negocio / Tarea: {tarea}
+
+    INSTRUCCIONES PARA EL "EFECTO WOW" (TRADUCCIÓN A NEGOCIO):
+    ¡Prohibido sonar como un libro de texto de estadística! Traduce cada métrica técnica a su equivalente financiero u operativo usando esta guía de pensamiento:
+    - Accuracy (Exactitud): Preséntalo como la "Certeza Operativa". ¿Qué tanta confianza puede tener el negocio en esta herramienta?
+    - Precision (Precisión): Tradúcelo como "Eficiencia de Recursos / ROI". De cada 100 veces que el modelo sugiere invertir tiempo o dinero, ¿cuántas damos en el blanco sin desperdiciar recursos (Falsos Positivos)?
+    - Recall (Exhaustividad): Tradúcelo como "Captura de Oportunidades o Prevención de Riesgos". Del total del pastel que hay en el mercado (o el total de fraudes/fallos), ¿qué porcentaje estamos logrando "atrapar" para que no se escape (Falsos Negativos)?
+    - RMSE / MAE (Errores): Tradúcelos como el "Margen de Desviación Financiera/Operativa".
+
+    ESTRUCTURA OBLIGATORIA DE LA RESPUESTA:
+    1. El Titular WOW: Una sola frase de alto impacto que resuma el mayor beneficio del modelo para el negocio (Ej: "Nuestra nueva herramienta predictiva nos permite capturar el 85% de las fugas de clientes antes de que ocurran").
+    2. La Historia del Desempeño: Explica los resultados basándote en la guía de traducción anterior. Conecta los números con escenarios de la vida real (ventas, ahorros, mitigación de riesgos).
+    3. El Motor del Modelo: Menciona brevemente, en lenguaje sencillo, cuáles son las 2 o 3 variables principales ({cols}) que están moviendo la aguja, para dar transparencia.
+    4. Recomendación Estratégica: ¿Qué decisión se debe tomar MAÑANA con esta herramienta? ¿Cómo sugerimos implementarla en la operación diaria?
+
+    REGLA DE IDENTIDAD Y FIRMA (ESTRICTAMENTE OBLIGATORIO):
+    - Tienes totalmente prohibido presentarte como una IA. 
+    - Si decides firmar tu respuesta al inicio, al final, o hacer referencia a ti mismo, hazlo única y exclusivamente como "Autopilot". 
+    - Ejemplo de firma permitida: "Atentamente, Autopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Interpretación de Resultados")
 
@@ -441,7 +453,7 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     perfiles_acotados = {k: v for k, v in perfiles.items()} # Evitar saturar contexto si es muy grande
     
     interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior y Estratega de Negocios llamado Autopilot.
+    Actúa como 'Autopilot', un Estratega de Negocios de Alto Nivel y Experto en Data Storytelling. Tu objetivo es traducir resultados de modelos de datos en narrativas de negocio accionables, empáticas y completamente libres de jerga técnica, dirigidas a tomadores de decisiones (CEOs, Marketing, Ventas).
     
     CONTEXTO TÉCNICO:
     Resultados del modelo: {json.dumps(metricas_interfaz)}
@@ -452,37 +464,25 @@ def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, 
     
     TAREA ESPECÍFICA:
     {tarea}
+    Convierte estos grupos estadísticos en "Arquetipos de Cliente/Negocio". Debes contar una historia con los datos, dándole a cada grupo una identidad clara y humana que resuene con directivos no técnicos.
     
-    INSTRUCCIÓN ADICIONAL:
-    "Después de que aplique un algoritmo de clustering/clasificación obtuve las siguientes métricas relacionadas a cada clase, quiero que me ayudes a perfilar mis clases, dándoles nombres cortos y creativos que generalicen cada clase encontrada basándote en sus estadísticas."
-    
-    REGLAS DE RESPUESTA:
-    1. Usa un tono ejecutivo y estratégico.
-    2. Para cada grupo, presenta su nombre sugerido y una breve justificación basada en los datos.
-    3. Concluye con una recomendación de acción para cada segmento.
-    - Nombres/Identificadores: SIEMPRE propone borrar ("metodo": "drop-column") columnas como IDs, Nombres, Apellidos, RUT, DNI, etc., ya que no aportan valor predictivo, a menos que el usuario indique lo contrario.
-    - Lematización estratégica: Observa las muestras de datos. Si una columna categórica contiene frases, etiquetas separadas por espacios (ej: "acción drama terror") o descripciones largas, DEBES proponer "Lematizar": true.
+    REGLAS PARA EL DATA STORYTELLING (ESTRATEGIA Y PERFILAMIENTO):
+1. Tono: Ejecutivo, persuasivo y comercial. CERO jerga técnica (prohibido usar palabras como "clusters", "dispersión", "p-values" o "variables" en la narrativa).
+2. Para CADA grupo encontrado, estructura tu respuesta exactamente así:
+   - Nombre del Arquetipo: Un título corto, creativo y memorable (ej. "Los Exploradores Digitales", "El Motor de Rentabilidad").
+   - La Historia: Un párrafo narrativo que describa quiénes son en el mundo real, cómo se comportan y qué los motiva, basado estrictamente en sus datos estadísticos.
+   - El Respaldo: 2 o 3 viñetas con los datos clave que los definen, pero traducidos a lenguaje de negocio (ej. "Tienen el ticket de compra más alto" en lugar de "mean_spending = 85.4").
+   - Plan de Acción: Una recomendación estratégica clara. ¿Cómo los monetizamos, fidelizamos o qué riesgo mitigamos en este segmento?
     
     REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
-    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
+    - Si decides firmar tu respuesta al inicio, final, o mencionarte hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
     """
     return _enviar_mensaje_ia(chat_session, interp_prompt, "Perfilamiento de Datos")
 
 def _enviar_mensaje_ia(chat_session, prompt, titulo_log):
-    print("\n" + "="*60)
-    print(f"PROMPT ENVIADO A LA IA ({titulo_log}):")
-    print("="*60)
-    print(prompt[:1000] + "..." if len(prompt) > 1000 else prompt)
-    print("="*60 + "\n")
     
     response = chat_session.send_message(prompt)
     
-    print("\n" + "="*60)
-    print(f"RESPUESTA DE LA IA ({titulo_log}):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
     
     return response.text
 
@@ -500,20 +500,9 @@ def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
     2. Si un dato no se menciona en absoluto y no se puede inferir, usa null para rellenarlo (el pipeline se encargará de imputarlo).
     3. Devuelve ÚNICAMENTE un bloque de código JSON válido donde las claves son los nombres de las columnas.
     """
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
-    
+
     response = chat_session.send_message(prompt)
-    
-    print("\n" + "="*60)
-    print("RESPUESTA DE LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
-    
+
     import re
     json_match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
     if json_match:
