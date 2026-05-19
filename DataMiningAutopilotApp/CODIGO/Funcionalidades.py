@@ -336,7 +336,7 @@ def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario
         
         REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
         - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
-        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
+        - Si vas a presentarte firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
         """
 
     print("\n" + "="*60)
