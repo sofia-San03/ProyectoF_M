@@ -209,7 +209,7 @@ def _construir_cubo_local(df_hechos: pd.DataFrame, dfs_dim: list) -> pd.DataFram
 # ║  DIALOGS / MODALS                                            ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-@st.dialog("Bienvenido a UrbanTech Copilot")
+@st.dialog("Bienvenido a DataMining Autopilot")
 def _onboarding_modal():
     st.markdown("##### ¿Cómo te llamamos?")
     nombre = st.text_input(
@@ -248,6 +248,10 @@ def _prediction_modal():
                         st.write("Datos interpretados por el agente:")
                         st.dataframe(df_n)
                         df_p = st.session_state.cleaner.transformar_nueva_tupla(df_n)
+                        print("\n" + "="*60)
+                        print("DATOS TRANSFORMADOS ENVIADOS AL MODELO (DEBUG):")
+                        print(df_p[res["cols"]].to_string())
+                        print("="*60 + "\n")
                         p = res["modelo"].predict(df_p[res["cols"]])
                         val_pred = p[0]
                         if isinstance(val_pred, (float, np.float64, np.float32, np.number)):
@@ -736,16 +740,14 @@ def _render_workspace():
                             ok = esperar_tablas_bq(nombres_esperados)
 
                         if not ok:
-                            st.error("Timeout: las tablas no aparecieron en BigQuery. Revisa los logs.")
-                            st.stop()
+                            raise Exception("Timeout: las tablas no aparecieron en BigQuery. Revisa los logs.")
                         st.success("Tablas cargadas en BigQuery")
 
                         with st.spinner("Construyendo cubo analítico..."):
                             if dimensiones:
                                 ok, resultado = llamar_build_cubo()
                                 if not ok:
-                                    st.error(f"Error al construir el cubo: {resultado}")
-                                    st.stop()
+                                    raise Exception(f"Error al construir el cubo: {resultado}")
                             else:
                                 client = get_bq_client()
                                 client.query(f"""
@@ -761,7 +763,32 @@ def _render_workspace():
                         st.rerun()
 
                     except Exception as e:
-                        st.error(f"Error en el proceso: {str(e)}")
+                        st.warning(f"⚠️ El procesamiento en la nube falló: {str(e)}")
+                        st.info("Cambiando automáticamente a modo local para continuar...")
+                        try:
+                            with st.spinner("Procesando archivos localmente..."):
+                                df_hechos = _leer_archivo_local(hechos)
+                                if dimensiones:
+                                    dfs_dim = [_leer_archivo_local(d) for d in dimensiones]
+                                    st.session_state.df = _construir_cubo_local(df_hechos, dfs_dim)
+                                    st.success(
+                                        f"Cubo local construido como fallback: {len(dimensiones)} dimensión(es) unidas "
+                                        f"({st.session_state.df.shape[0]:,} filas × {st.session_state.df.shape[1]} columnas)."
+                                    )
+                                else:
+                                    st.session_state.df = df_hechos
+                                    st.success(
+                                        f"Dataset cargado localmente como fallback: {df_hechos.shape[0]:,} filas × {df_hechos.shape[1]} columnas."
+                                    )
+                            # Actualizar modo a local para reflejarlo en la UI
+                            st.session_state.modo_app["modo"] = "local"
+                            st.session_state.modo_app["razon"] = f"Fallo en la nube: {str(e)}. Fallback local activado."
+                            
+                            time.sleep(2)
+                            st.session_state.phase = "PROPUESTA"
+                            st.rerun()
+                        except Exception as local_err:
+                            st.error(f"Error crítico: También falló el procesamiento local: {str(local_err)}")
 
     # ── FASE: PROPUESTA ───────────────────────────────────────
     elif st.session_state.phase == "PROPUESTA":
@@ -1117,12 +1144,46 @@ def _render_workspace():
                         nombre_usuario=st.session_state.get("user_name"),
                     )
                 else:
+                    # --- Extraer coeficientes / importancias para modelos de caja blanca ---
+                    coeficientes_info = None
+                    modelo_obj = res.get("modelo")
+                    cols_modelo = res.get("cols", [])
+                    try:
+                        if modelo_obj is not None and cols_modelo:
+                            if hasattr(modelo_obj, "feature_importances_"):
+                                # Árboles, RandomForest
+                                importancias = modelo_obj.feature_importances_
+                                pares = sorted(zip(cols_modelo, importancias), key=lambda x: abs(x[1]), reverse=True)
+                                coeficientes_info = "\n".join(
+                                    f"  {i+1:2}. {col:40s}  importancia = {val:.4f}"
+                                    for i, (col, val) in enumerate(pares[:15])
+                                )
+                            elif hasattr(modelo_obj, "coef_"):
+                                # Regresión lineal / logística
+                                coef = np.asarray(modelo_obj.coef_).flatten()
+                                pares = sorted(zip(cols_modelo, coef), key=lambda x: abs(x[1]), reverse=True)
+                                coeficientes_info = "\n".join(
+                                    f"  {i+1:2}. {col:40s}  coeficiente = {val:+.4f}"
+                                    for i, (col, val) in enumerate(pares[:15])
+                                )
+                            # Modelos envueltos (TransformedTargetRegressor)
+                            elif hasattr(modelo_obj, "regressor_") and hasattr(modelo_obj.regressor_, "coef_"):
+                                coef = np.asarray(modelo_obj.regressor_.coef_).flatten()
+                                pares = sorted(zip(cols_modelo, coef), key=lambda x: abs(x[1]), reverse=True)
+                                coeficientes_info = "\n".join(
+                                    f"  {i+1:2}. {col:40s}  coeficiente = {val:+.4f}"
+                                    for i, (col, val) in enumerate(pares[:15])
+                                )
+                    except Exception as _e_coef:
+                        print(f"[INFO] No se pudieron extraer coeficientes del modelo: {_e_coef}")
+
                     explicacion = interpretar_resultados(
                         st.session_state.chat_resultados_session,
                         metricas_interfaz,
                         res["cols"],
                         tarea,
                         nombre_usuario=st.session_state.get("user_name"),
+                        coeficientes_info=coeficientes_info,
                     )
                 st.session_state.messages_resultados.append(
                     {"role": "assistant", "content": explicacion}

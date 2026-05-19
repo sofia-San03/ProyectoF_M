@@ -420,6 +420,7 @@ div[data-testid="stHorizontalBlock"] {
 .ae-assistant {
     background: var(--bg-surface);
     border-left: 1px solid var(--border-subtle);
+    margin-left: var(--space-2);
     min-height: calc(100vh - var(--topbar-height) - var(--bar-height));
     display: flex;
     flex-direction: column;

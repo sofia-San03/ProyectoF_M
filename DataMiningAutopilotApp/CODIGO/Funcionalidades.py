@@ -215,7 +215,9 @@ def validar_tipo_problema(df, target, modelo_nombre):
         return False, f"La variable objetivo '{target}' solo tiene {clases} clase(s) única(s). Se requieren al menos 2 clases para entrenamiento supervisado."
 
     # Validar mínimo de 2 registros por clase en modelos de clasificación
-    if tipo in ["clasificacion_binaria", "supervisado"]:
+    # Solo aplica si el target es categórico (no numérico continuo)
+    es_target_categorico = not pd.api.types.is_numeric_dtype(y)
+    if tipo in ["clasificacion_binaria", "supervisado"] and es_target_categorico:
         counts = y.value_counts()
         min_count = counts.min()
         if min_count < 2:
@@ -451,10 +453,30 @@ def build_model_context_prompt(model_info: dict, nombre_usuario=None) -> str:
     
     """
 
-def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea, nombre_usuario=None):
+def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea, nombre_usuario=None, coeficientes_info=None):
     nombre_instruction = ""
     if nombre_usuario:
         nombre_instruction = f"\nTe estás dirigiendo al usuario {nombre_usuario}. Dirígete a él de manera personalizada e incorpóralo en tu saludo u otra parte de tu respuesta de forma muy profesional.\n"
+
+    # Bloque de coeficientes/importancias para modelos de caja blanca
+    bloque_coeficientes = ""
+    if coeficientes_info:
+        bloque_coeficientes = f"""
+    ════════════════════════════════════════
+    MOTOR INTERNO DEL MODELO (VARIABLES MÁS INFLUYENTES)
+    ════════════════════════════════════════
+    El modelo es de tipo "caja blanca", lo que significa que podemos ver exactamente qué variables
+    están impulsando sus predicciones y con qué peso. A continuación se listan las variables
+    ordenadas de mayor a menor influencia sobre la variable objetivo:
+
+    {coeficientes_info}
+
+    NOTA IMPORTANTE: Los signos importan:
+    - Un coeficiente/importancia POSITIVO (+) significa que cuando esa variable sube, la predicción TAMBIÉN sube.
+    - Un coeficiente NEGATIVO (-) significa que cuando esa variable sube, la predicción BAJA.
+    - Para árboles y Random Forest, los valores de importancia son siempre positivos (miden cuánto mejora la predicción esa variable, sin importar la dirección).
+    ════════════════════════════════════════
+    """
 
     interp_prompt = f"""
     Actúa como 'Autopilot', un Consultor Élite en Estrategia de IA y Negocios. Tu objetivo es generar un "Efecto WOW", traduciendo métricas de evaluación de modelos predictivos en impacto real y tangible para directivos que no tienen perfil técnico. {nombre_instruction}
@@ -463,6 +485,7 @@ def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea, nombre_
     Resultados de las métricas (JSON): {json.dumps(metricas_interfaz)}
     Variables que impulsan el modelo: {cols}
     Objetivo de Negocio / Tarea: {tarea}
+    {bloque_coeficientes}
 
     INSTRUCCIONES PARA EL "EFECTO WOW" (TRADUCCIÓN A NEGOCIO):
     ¡Prohibido sonar como un libro de texto de estadística! Traduce cada métrica técnica a su equivalente financiero u operativo usando esta guía de pensamiento:
@@ -474,7 +497,7 @@ def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea, nombre_
     ESTRUCTURA OBLIGATORIA DE LA RESPUESTA:
     1. El Titular WOW: Una sola frase de alto impacto que resuma el mayor beneficio del modelo para el negocio (Ej: "Nuestra nueva herramienta predictiva nos permite capturar el 85% de las fugas de clientes antes de que ocurran").
     2. La Historia del Desempeño: Explica los resultados basándote en la guía de traducción anterior. Conecta los números con escenarios de la vida real (ventas, ahorros, mitigación de riesgos).
-    3. El Motor del Modelo: Menciona brevemente, en lenguaje sencillo, cuáles son las 2 o 3 variables principales ({cols}) que están moviendo la aguja, para dar transparencia.
+    3. El Motor del Modelo: {"Usando los datos del MOTOR INTERNO, explica en lenguaje de negocio cuáles son las 3 variables que más impulsan (o frenan) la variable objetivo y qué significa eso en términos prácticos para el negocio." if coeficientes_info else f"Menciona brevemente, en lenguaje sencillo, cuáles son las 2 o 3 variables principales ({cols}) que están moviendo la aguja, para dar transparencia."}
     4. Recomendación Estratégica: ¿Qué decisión se debe tomar MAÑANA con esta herramienta? ¿Cómo sugerimos implementarla en la operación diaria?
 
     REGLA DE IDENTIDAD Y FIRMA (ESTRICTAMENTE OBLIGATORIO):

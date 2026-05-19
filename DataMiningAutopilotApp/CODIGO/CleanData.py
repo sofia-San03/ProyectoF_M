@@ -259,8 +259,17 @@ class Transformar_Df:
                 self._registrar_log(columna, "eliminacion_columna_vacia", "success")
                 return {'columna': columna, 'metodo': 'drop-column', 'Valor_de_relleno': None}
 
+            es_numerica = ptypes.is_numeric_dtype(self.df[columna])
+
             if null_count == 0:
                 self.imputaciones_nulos[columna] = None
+                if es_numerica:
+                    skew = self.df[columna].dropna().skew()
+                    self.backup_imputaciones[columna] = self.df[columna].mean() if abs(skew) < 1 else self.df[columna].median()
+                else:
+                    modas_backup = self.df[columna].mode(dropna=True)
+                    self.backup_imputaciones[columna] = modas_backup.iloc[0] if not modas_backup.empty else "Desconocido"
+                
                 if original_numerico is not None:
                     self._ajustar_tipo_numerico_post_imputacion(columna, original_numerico)
                 self._registrar_log(columna, "sin_nulos", "success")
@@ -753,7 +762,18 @@ class Transformar_Df:
         for col in list(df_pred.columns):
             regla = self.reglas_entrenamiento.get(col, {})
             
-            if col in self.columnas_texto_separadas or regla.get('Lematizar', False):
+            # Identificar si la columna es o era de tipo texto/booleano para aplicarle la misma limpieza/normalización que en entrenamiento
+            dtype_original = self.dtypes_entrenamiento.get(col, "")
+            es_texto_bool = "object" in dtype_original or \
+                            "string" in dtype_original or \
+                            "bool" in dtype_original or \
+                            (col in df_pred.columns and (
+                                ptypes.is_object_dtype(df_pred[col]) or \
+                                ptypes.is_string_dtype(df_pred[col]) or \
+                                ptypes.is_bool_dtype(df_pred[col])
+                            ))
+            
+            if es_texto_bool or col in self.columnas_texto_separadas or regla.get('Lematizar', False):
                 df_pred[col] = df_pred[col].apply(lambda x: unicodedata.normalize('NFKD', str(x)).encode('ASCII', 'ignore').decode('utf-8') if pd.notnull(x) else x)
                 df_pred[col] = df_pred[col].str.lower()
                 df_pred[col] = df_pred[col].apply(lambda x: re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]', ' ', str(x)) if pd.notnull(x) else x)
@@ -821,6 +841,12 @@ class Transformar_Df:
         columnas_bool = df_pred.select_dtypes(include=['bool']).columns
         if not columnas_bool.empty:
             df_pred[columnas_bool] = df_pred[columnas_bool].astype(int)
+
+        # Rellenar con la media del scaler los NaNs residuales de variables numéricas para no desviar la predicción
+        if self.scaler is not None and hasattr(self.scaler, "mean_") and hasattr(self.scaler, "feature_names_in_"):
+            for col_name, col_mean in zip(self.scaler.feature_names_in_, self.scaler.mean_):
+                if col_name in df_pred.columns:
+                    df_pred[col_name] = df_pred[col_name].fillna(col_mean)
 
         # Garantizar que no quede NINGÚN NaN residual antes de escalar o aplicar PCA para evitar fallos en estimadores como MLPRegressor
         df_pred = df_pred.fillna(0)
