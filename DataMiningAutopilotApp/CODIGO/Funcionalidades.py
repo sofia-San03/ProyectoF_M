@@ -1,711 +1,852 @@
 import json
 import os
-import google.generativeai as genai
-from google.api_core import exceptions
-import pandas as pd
-import streamlit as st
-import requests
+import re
 import time
 import numpy as np
-from google.cloud import storage, bigquery
-import google.auth
-import google.auth.transport.requests
-import google.oauth2.id_token
+from io import StringIO
 
-from CODIGO.CleanData import Transformar_Df
-from CODIGO.MODELS import (
-    Arbol_decision,
-    Clustering_optimizacion,
-    Credit_scoring,
-    KNN_model,
-    Redes_neuronales,
-    Regresion_lineal,
-    Regresion_logistica,
+# --- CONFIGURACIÓN AUTOMÁTICA DE CREDENCIALES GCP ---
+path_credenciales = os.path.abspath(os.path.join(os.path.dirname(__file__), "credenciales", "BigQuery_credentials.json"))
+
+if os.path.exists(path_credenciales):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path_credenciales
+
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+
+from CODIGO.CargarDatos import AnalizarDatos
+from CODIGO.Funcionalidades import (
+    MODELOS_DISPONIBLES,
+    extraer_configuracion_pipeline,
+    obtener_metricas_esperadas,
+    ocultar_woe_interfaz,
+    validar_tipo_problema,
+    aplicar_limpieza_interna,
+    orquestador_modelos_interno,
+    es_modelo_clustering,
+    es_modelo_redes_neuronales,
+    es_modelo_knn,
+    es_modelo_arbol,
+    es_modelo_regresion_logistica,
+    es_modelo_credit_scoring,
+    get_ia_proposal,
+    load_css,
+    iniciar_chat,
+    interpretar_resultados,
+    interpretar_resultados_perfilarDatos,
+    texto_a_dataframe,
+    subir_a_gcs,
+    tabla_existe_en_bq,
+    leer_cubo_de_bq,
+    esperar_tablas_bq,
+    llamar_build_cubo,
+    _resumen_tecnico_pipeline,
+    _metricas_dashboard,
+    _render_metricas_clave,
+    _formatear_metrica
 )
 
-MODELOS_DISPONIBLES = {
-    "Regresion_lineal": {
-        "funcion": Regresion_lineal,
-        "implementado": True,
-        "tipo_problema": "regresion",
-        "metricas": ["R2", "MSE", "RMSE", "MAE", "MAPE"],
-    },
-    "Arbol_decision": {
-        "funcion": Arbol_decision,
-        "implementado": True,
-        "tipo_problema": "supervisado",
-        "metricas": ["Accuracy/R2", "Precision/RMSE", "Recall/MAE", "F1", "ROC-AUC"],
-    },
-    "Regresion_logistica": {
-        "funcion": Regresion_logistica,
-        "implementado": True,
-        "tipo_problema": "clasificacion_binaria",
-        "metricas": ["Accuracy", "Precision", "Recall", "F1-Score", "ROC-AUC"],
-    },
-    "Clustering_optimizacion": {
-        "funcion": Clustering_optimizacion,
-        "implementado": True,
-        "tipo_problema": "clustering",
-        "metricas": [
-            "Silhouette Score",
-            "Davies-Bouldin Index",
-            "Inercia",
-            "Distancia Euclidiana Media",
-            "Distancia Manhattan Media",
-        ],
-    },
-    "Redes_neuronales": {
-        "funcion": Redes_neuronales,
-        "implementado": True,
-        "tipo_problema": "supervisado",
-        "metricas": ["Accuracy/R2", "Precision/RMSE", "Recall/MAE", "F1", "ROC-AUC", "Loss"],
-    },
-    "KNN": {
-        "funcion": KNN_model,
-        "implementado": True,
-        "tipo_problema": "supervisado",
-        "metricas": ["Accuracy/R2", "Precision/RMSE", "Recall/MAE", "F1", "Error vs K"],
-    },
-    "Credit_scoring": {
-        "funcion": Credit_scoring,
-        "implementado": True,
-        "tipo_problema": "clasificacion_binaria",
-        "metricas": ["ROC-AUC", "KS", "Gini", "Precision", "Recall"],
-    },
+st.set_page_config(page_title="Autopilot", page_icon="⚡", layout="wide")
+load_css("styles.css")
+
+if "phase" not in st.session_state:
+    st.session_state.phase = "CARGA"
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "proposal" not in st.session_state:
+    st.session_state.proposal = None
+if "config_pipeline" not in st.session_state:
+    st.session_state.config_pipeline = None
+if "results" not in st.session_state:
+    st.session_state.results = None
+if "cleaner" not in st.session_state:
+    st.session_state.cleaner = None
+if "report_html" not in st.session_state:
+    st.session_state.report_html = None
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = iniciar_chat()
+if "messages_propuesta" not in st.session_state:
+    st.session_state.messages_propuesta = []
+if "chat_resultados_session" not in st.session_state:
+    st.session_state.chat_resultados_session = iniciar_chat()
+if "messages_resultados" not in st.session_state:
+    st.session_state.messages_resultados = []
+if "data_dict_content" not in st.session_state:
+    st.session_state.data_dict_content = None
+if "data_dict_name" not in st.session_state:
+    st.session_state.data_dict_name = None
+if "last_uploaded_file" not in st.session_state:
+    st.session_state.last_uploaded_file = None
+if "last_uploaded_dict" not in st.session_state:
+    st.session_state.last_uploaded_dict = None
+if "proposal_update_notice" not in st.session_state:
+    st.session_state.proposal_update_notice = False
+
+st.title("  Data mining Autopilot ")
+st.text("Automatización del preprocesamiento de datos y entrenamiento de modelos de machine learning")
+
+# Navegación Lateral (Sidebar)
+opciones_nav = ["Carga de Datos"]
+if st.session_state.df is not None:
+    opciones_nav.append("Propuesta")
+if st.session_state.results is not None:
+    opciones_nav.append("Resultados y Predicción")
+
+map_phase_to_nav = {
+    "CARGA": "Carga de Datos",
+    "PROPUESTA": "Propuesta",
+    "EJECUCION": "Propuesta",
+    "RESULTADOS": "Resultados y Predicción"
+}
+map_nav_to_phase = {
+    "Carga de Datos": "CARGA",
+    "Propuesta": "PROPUESTA",
+    "Resultados y Predicción": "RESULTADOS"
 }
 
-ALIAS_MODELOS = {
-    "regresion_lineal": "Regresion_lineal",
-    "regresión_lineal": "Regresion_lineal",
-    "lineal": "Regresion_lineal",
-    "linear": "Regresion_lineal",
-    "arbol_decision": "Arbol_decision",
-    "árbol_decisión": "Arbol_decision",
-    "arbol": "Arbol_decision",
-    "árbol": "Arbol_decision",
-    "decision_tree": "Arbol_decision",
-    "regresion_logistica": "Regresion_logistica",
-    "regresión_logística": "Regresion_logistica",
-    "logistica": "Regresion_logistica",
-    "logística": "Regresion_logistica",
-    "clustering": "Clustering_optimizacion",
-    "clustering_optimizacion": "Clustering_optimizacion",
-    "cluster": "Clustering_optimizacion",
-    "redes_neuronales": "Redes_neuronales",
-    "red_neuronal": "Redes_neuronales",
-    "neural_network": "Redes_neuronales",
-    "knn": "KNN",
-    "k_vecinos_mas_cercanos": "KNN",
-    "k_vecinos_más_cercanos": "KNN",
-    "k vecinos mas cercanos": "KNN",
-    "k vecinos más cercanos": "KNN",
-    "credit_scoring": "Credit_scoring",
-    "credit scoring": "Credit_scoring",
-    "scoring": "Credit_scoring",
-}
-
-def load_css(file_name):
-    try:
-        with open(file_name, "r") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.warning(f"No se encontró el archivo de estilos: {file_name}")
-
-api_key = None
-try:
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    pass
-
-gemini_key_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "credenciales", "GEMINI_KEY.txt"))
-
-if not api_key:
-    if os.path.exists(gemini_key_path):
-        try:
-            with open(gemini_key_path, "r", encoding="utf-8") as f:
-                api_key = f.read().strip()
-        except Exception:
-            pass
-    elif os.path.exists("GEMINI_KEY.txt"):
-        try:
-            with open("GEMINI_KEY.txt", "r", encoding="utf-8") as f:
-                api_key = f.read().strip()
-        except Exception:
-            pass
-
-if api_key:
-    genai.configure(api_key=api_key)
-else:
-    st.error("No se encontro una API key valida. Configura GEMINI_API_KEY o GEMINI_KEY.txt.")
-    st.stop()
-
-guia_tecnica = ""
-if os.path.exists("GUIA_TECNICA_IA.txt"):
-    with open("GUIA_TECNICA_IA.txt", "r", encoding="utf-8") as f:
-        guia_tecnica = f.read()
-
-model_ia = genai.GenerativeModel("gemini-2.5-flash")
-
-def iniciar_chat():
-    return model_ia.start_chat(history=[])
-
-def normalizar_modelo(tipo_modelo):
-    if not tipo_modelo:
-        raise ValueError("No se recibio un modelo en la configuracion.")
-
-    modelo_limpio = str(tipo_modelo).strip()
-    if modelo_limpio in MODELOS_DISPONIBLES:
-        return modelo_limpio
-
-    clave = modelo_limpio.lower().replace("-", "_").replace(" ", "_")
-    if clave in ALIAS_MODELOS:
-        return ALIAS_MODELOS[clave]
-
-    raise ValueError(
-        f"Modelo no reconocido: '{tipo_modelo}'. Modelos disponibles: {', '.join(MODELOS_DISPONIBLES.keys())}"
-    )
-
-def extraer_configuracion_pipeline(conf):
-    target = conf.get("col_target", conf.get("target"))
-    reglas1 = conf.get("reglas_dict", {})
-    reglas2 = conf.get("metodos_imputacion", {})
-    reglas = reglas1 if reglas1 else reglas2
-    modelo_t = conf.get("tipo_modelo", conf.get("modelo", "Regresion_lineal"))
-    modelo_normalizado = normalizar_modelo(modelo_t)
-    es_pca = conf.get("EsPCA", conf.get("es_pca", False))
-    n_clusters = conf.get("n_clusters", None)
+with st.sidebar:
+    st.markdown("""
+    <div style="display:flex; align-items:center; gap: 10px; margin-bottom: 20px;">
+        <div style="width: 36px; height: 36px; border-radius: 8px; background: rgba(78, 222, 163, 0.1); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(78, 222, 163, 0.2);">
+            <span style="font-size: 18px !important;">📑</span>
+        </div>
+        <div>
+            <span style="margin:0; font-size: 13px !important; font-weight: 700 !important; color: #4edea3 !important; padding:0; background:none; border:none; box-shadow:none; font-family: 'Sora', sans-serif; display: block; line-height: 1.2 !important; letter-spacing: 0.5px !important;">Data Mining Autopilot</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if MODELOS_DISPONIBLES[modelo_normalizado]["tipo_problema"] == "clustering":
-        target = None
+    st.markdown("<p style='margin-bottom: 5px; color: #bbcabf; font-weight: 600; font-family: Sora, sans-serif; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;'>Navegación</p>", unsafe_allow_html=True)
+    
+    current_active_nav = map_phase_to_nav.get(st.session_state.phase, "Carga de Datos")
+    
+    for opcion in opciones_nav:
+        is_active = (opcion == current_active_nav)
+        if st.button(opcion, key=f"nav_btn_{opcion}", type="primary" if is_active else "secondary", use_container_width=True):
+            if st.session_state.phase != "EJECUCION":
+                st.session_state.phase = map_nav_to_phase[opcion]
+                st.rerun()
         
-    return target, reglas, modelo_normalizado, es_pca, n_clusters
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.button("🔴 Reiniciar Sistema", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
-def obtener_metricas_esperadas(modelo_nombre):
-    return MODELOS_DISPONIBLES[modelo_nombre]["metricas"]
-
-def ocultar_woe_interfaz(valor):
-    if isinstance(valor, dict):
-        return {
-            clave: ocultar_woe_interfaz(contenido)
-            for clave, contenido in valor.items()
-            if "woe" not in str(clave).lower()
-        }
-    if isinstance(valor, list):
-        return [ocultar_woe_interfaz(item) for item in valor]
-    return valor
-
-def validar_tipo_problema(df, target, modelo_nombre):
-    info_modelo = MODELOS_DISPONIBLES[modelo_nombre]
-    tipo = info_modelo["tipo_problema"]
-
-    if tipo == "clustering":
-        return True, "No supervisado: no requiere variable objetivo."
-
-    if not target:
-        return False, "Este modelo requiere una variable objetivo."
-
-    if target not in df.columns:
-        return False, f"La variable objetivo '{target}' no existe en el dataset."
-
-    y = df[target].dropna()
-    clases = y.nunique()
-
-    if tipo == "regresion":
-        if pd.api.types.is_numeric_dtype(y):
-            return True, "Regresion supervisada con target numerico."
-        return False, "Regresion lineal requiere una variable objetivo numerica."
-
-    if tipo == "clasificacion_binaria":
-        if clases == 2:
-            return True, "Clasificacion binaria valida."
-        return False, f"Este modelo requiere exactamente 2 clases en el target; se detectaron {clases}."
-
-    if tipo == "supervisado":
-        return True, f"Modelo supervisado con {clases} valores unicos en el target."
-
-    return True, "Tipo de problema validado."
-
-def aplicar_limpieza_interna(df, col_target, reglas_dict=None, es_pca=False):
-    transformador = Transformar_Df(df, col_target=col_target)
-    transformador.Clean_All_Rows(reglas_dict=reglas_dict, EsPCA=es_pca)
-    return transformador, transformador.df, transformador.y
-
-def orquestador_modelos_interno(X, y, tipo_modelo, n_clusters_fix=None):
-    modelo_nombre = normalizar_modelo(tipo_modelo)
-    info_modelo = MODELOS_DISPONIBLES[modelo_nombre]
-
-    if not info_modelo["implementado"]:
-        raise NotImplementedError(
-            f"El modelo '{modelo_nombre}' esta reconocido por la arquitectura, pero no esta implementado."
-        )
-
-    if y is None and info_modelo["tipo_problema"] != "clustering":
-        raise ValueError(f"El modelo '{modelo_nombre}' requiere variable objetivo.")
-
-    if info_modelo["tipo_problema"] == "clustering":
-        json_res, modelo, cols = info_modelo["funcion"](X, y, n_clusters_fix=n_clusters_fix)
-    else:
-        json_res, modelo, cols = info_modelo["funcion"](X, y)
-        
-    return modelo, json.loads(json_res), cols
-
-def es_modelo_clustering(tipo_modelo):
-    return MODELOS_DISPONIBLES[normalizar_modelo(tipo_modelo)]["tipo_problema"] == "clustering"
-
-def es_modelo_redes_neuronales(tipo_modelo):
-    return normalizar_modelo(tipo_modelo) == "Redes_neuronales"
-
-def es_modelo_knn(tipo_modelo):
-    return normalizar_modelo(tipo_modelo) == "KNN"
-
-def es_modelo_arbol(tipo_modelo):
-    return normalizar_modelo(tipo_modelo) == "Arbol_decision"
-
-def es_modelo_regresion_logistica(tipo_modelo):
-    return normalizar_modelo(tipo_modelo) == "Regresion_logistica"
-
-def es_modelo_credit_scoring(tipo_modelo):
-    return normalizar_modelo(tipo_modelo) == "Credit_scoring"
-
-def get_ia_proposal(chat_session, df, feedback="", is_initial=False, diccionario_datos=None):
-    dtypes = df.dtypes.apply(lambda x: str(x)).to_dict()
-    nulls = df.isnull().sum().to_dict()
-
-    # Obtener muestra de datos categóricos para contexto real
-    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-    sample_data = ""
-    if cat_cols:
-        sample_data = "\nMUESTRA DE DATOS CATEGÓRICOS (Primeras 3 filas):\n"
-        sample_data += df[cat_cols].head(3).to_string()
-
-    dict_context = ""
-    dict_instruction = ""
-    if diccionario_datos:
-        dict_context = f"\n========================================\nDICCIONARIO DE DATOS PROPORCIONADO POR EL USUARIO (Información de negocio extra):\n{diccionario_datos}\n========================================\n"
-        dict_instruction = '\nOBLIGATORIO: Como has recibido un diccionario de datos del usuario, es mandatorio que Finalices tu respuesta de análisis (o de confirmación de ajustes) con la frase exacta: "He recibido tu diccionario de datos, donde..." y continúes resumiendo brevemente lo que comprendes de él y cómo influye de manera provechosa en tu propuesta estratégica.\n'
-
-    if is_initial:
-        prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
-        Guia tecnica interna: {guia_tecnica}
-        Metadatos: {json.dumps(dtypes)}
-        Valores nulos: {json.dumps(nulls)}
-        {sample_data}
-        {dict_context}
-
-        TAREA INICIAL:
-        1. Presenta un plan inicial de ciencia de datos con un enfoque 100% estratégico. Utiliza el diccionario de datos como información extra del negocio para mayor conocimiento de las variables.
-        2. Usa títulos (##) que hablen de NEGOCIO (ej. 'Impacto en la Rentabilidad', 'Visión General del Proyecto') en lugar de términos técnicos.
-        3. Explica la estrategia de datos y por qué elegiste el modelo sin usar jerga compleja.
-        4. Incluye recomendaciones sobre la calidad de la información y variables relevantes.
-        5. NUNCA menciones nombres de funciones técnicas internas de Python ni palabras como 'Pipeline', 'JSON' o 'Preprocesamiento' en tus títulos o explicaciones.
-        {dict_instruction}
-        
-        RESTRICCIONES CRÍTICAS PARA EL JSON (OBLIGATORIO):
-        - Columnas de Nombres, correos, ids, telefono, direccion (name, nombre, apellido, email, phone, address, etc.): DEBES usar "metodo": "drop-column". Está PROHIBIDO usar TargetEncoding o Dummies en ellas, a no ser que el usuario lo pida explícitamente.
-        - Columnas con separadores (genres, tags, keywords): Si ves "|" o muchos espacios en la muestra, DEBES usar "Lematizar": true. Prohibido usar Dummies aquí, a no ser que el usuario lo pida explícitamente.
-        - Todas las columnas del dataset original deben aparecer en reglas_dict.
-        
-        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
-        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
-        
-        6. Al final, incluye un bloque JSON válido con: col_target, tipo_modelo, reglas_dict y EsPCA (este bloque será ocultado automáticamente).
-        """
-    else:
-        prompt = f"""
-        Eres un Consultor de Negocio y Estratega de Datos llamado Autopilot.
-        INSTRUCCIONES DEL USUARIO: "{feedback}"
-        {dict_context}
-        
-        EVALUACIÓN DE INTENCIÓN:
-        Analiza si el usuario te está pidiendo MODIFICAR el plan de tratamiento/modelo o si solo está haciendo una PREGUNTA/DUDA.
-        
-        SI PIDE MODIFICAR EL PLAN:
-        1. Empieza diciendo: 'Entendido, he procesado tus ajustes...'
-        2. Explica los cambios estratégicos.
-        {dict_instruction}
-        3. OBLIGATORIO: Al final incluye un nuevo bloque JSON válido con la configuración técnica actualizada (col_target, tipo_modelo, reglas_dict y EsPCA).
-        
-        SI SOLO HACE UNA PREGUNTA (o pide sugerencias/aclaraciones sin pedir cambios al plan):
-        1. Responde a su duda detalladamente enfocándote en negocio, datos and algoritmos.
-        2. NO hables de código.
-        {dict_instruction}
-        3. MUY IMPORTANTE: NO incluyas ningún bloque JSON al final. De esta forma el sistema sabrá que no hay cambios técnicos.
-        
-        REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-        - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. 
-        - Si vas a firmar o despedirte, utiliza única y exclusivamente el nombre de "Autopilot". Ejemplo de firma permitida: "Atentamente,\nAutopilot".
-        """
-
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Propuesta Estratégica):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
+if st.session_state.phase == "CARGA":
+    st.markdown("<h2 style='text-align:center; border:none; background:none; box-shadow:none;'>Inicia el Futuro de tus Datos</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; color:#bbcabf'>Sube tus datasets para comenzar el procesamiento neuronal.</p><br>", unsafe_allow_html=True)
     
-    try:
-        response = chat_session.send_message(prompt)
-        
-        print("\n" + "="*60)
-        print("RESPUESTA DE LA IA (Propuesta Estratégica):")
-        print("="*60)
-        print(response.text)
-        print("="*60 + "\n")
-        
-        return response.text
-    except exceptions.ResourceExhausted:
-        return "⚠️ **Error de Cuota Superado (429):** El Agente IA ha recibido demasiadas solicitudes en poco tiempo. Por favor, espera unos 30 segundos antes de volver a preguntar o intentar otro ajuste. Esto se debe a los límites de la capa gratuita de Gemini."
-    except Exception as e:
-        return f"⚠️ **Error al conectar con la IA:** {str(e)}"
-
-def chat_resultados_ia_stream(chat_session, mensaje_usuario, model_context_prompt):
-    prompt = f"""
-    [INSTRUCCIONES DEL SISTEMA]
-    {model_context_prompt}
+    col1, col2, col3 = st.columns(3)
     
-    [NUEVA PREGUNTA DEL USUARIO]
-    "{mensaje_usuario}"
-    """
-    try:
-        response = chat_session.send_message(prompt, stream=True)
-        return response
-    except exceptions.ResourceExhausted:
-        st.error("⚠️ **Error de Cuota (429):** Límite alcanzado. Espera 30 segundos.")
-        return None
-    except Exception as e:
-        st.error(f"⚠️ **Error:** {str(e)}")
-        return None
-
-def build_model_context_prompt(model_info: dict) -> str:
-    tipo        = model_info.get("tipo_modelo", "No especificado")
-    target      = model_info.get("variable_obj", "No especificada")
-    metricas    = model_info.get("metricas", {})
-    n_reg       = model_info.get("n_registros", "—")
-    n_feat      = model_info.get("n_features", "—")
-    clases      = model_info.get("clases", [])
-    encodings   = model_info.get("encodings", [])
-    pca         = model_info.get("pca_aplicado", False)
-    grid        = model_info.get("grid_search", False)
-
-    metricas_str = "\n".join(f"    - {k}: {v}" for k, v in metricas.items()) if metricas else "    - No disponibles"
-    clases_str   = ", ".join(str(c) for c in clases) if clases else "—"
-    enc_str      = ", ".join(encodings) if encodings else "No especificados"
-
-    return f"""Eres un asistente experto en Machine Learning integrado en "Data Mining Autopilot".
-    Tu misión es ayudar al usuario a entender e interpretar el modelo recién entrenado.
-
-    ════════════════════════════════════════
-    CONTEXTO DEL MODELO ENTRENADO
-    ════════════════════════════════════════
-      Tipo de modelo       : {tipo}
-      Variable objetivo    : {target}
-      Clases (si aplica)   : {clases_str}
-      Registros            : {n_reg}
-      Features usadas      : {n_feat}
-      Encodings aplicados  : {enc_str}
-      PCA aplicado         : {"Sí" if pca else "No"}
-      GridSearchCV usado   : {"Sí" if grid else "No"}
-
-      Métricas obtenidas:
-    {metricas_str}
-    ════════════════════════════════════════
-
-    INSTRUCCIONES:
-      1. Responde siempre en español, de forma clara y útil.
-      2. Traduce métricas técnicas a lenguaje de negocio.
-      3. Si detectas problemas (overfitting, desbalanceo, etc.) menciónalos.
-      4. Sé conciso pero completo.
-      5. Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares. Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
-    """
-
-def interpretar_resultados(chat_session, metricas_interfaz, cols, tarea):
-    interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior llamado Autopilot.
-    Resultados: {json.dumps(metricas_interfaz)}
-    Variables usadas: {cols}
-    Tarea: {tarea}
-    Concluye con una recomendación estratégica.
-    
-    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
-    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
-    """
-    return _enviar_mensaje_ia(chat_session, interp_prompt, "Interpretación de Resultados")
-
-def interpretar_resultados_perfilarDatos(chat_session, metricas_interfaz, cols, perfiles, tarea):
-    """
-    Función especializada para perfilar clases/clusters usando estadísticas descriptivas.
-    """
-    perfiles_acotados = {k: v for k, v in perfiles.items()} # Evitar saturar contexto si es muy grande
-    
-    interp_prompt = f"""
-    Actúa como un Consultor de Data Science Senior y Estratega de Negocios llamado Autopilot.
-    
-    CONTEXTO TÉCNICO:
-    Resultados del modelo: {json.dumps(metricas_interfaz)}
-    Variables procesadas: {cols}
-    
-    PERFILAMIENTO DE LOS GRUPOS (ESTADÍSTICAS):
-    {json.dumps(perfiles_acotados)}
-    
-    TAREA ESPECÍFICA:
-    {tarea}
-    
-    INSTRUCCIÓN ADICIONAL:
-    "Después de que aplique un algoritmo de clustering/clasificación obtuve las siguientes métricas relacionadas a cada clase, quiero que me ayudes a perfilar mis clases, dándoles nombres cortos y creativos que generalicen cada clase encontrada basándote en sus estadísticas."
-    
-    REGLAS DE RESPUESTA:
-    1. Usa un tono ejecutivo y estratégico.
-    2. Para cada grupo, presenta su nombre sugerido y una breve justificación basada en los datos.
-    3. Concluye con una recomendación de acción para cada segmento.
-    - Nombres/Identificadores: SIEMPRE propone borrar ("metodo": "drop-column") columnas como IDs, Nombres, Apellidos, RUT, DNI, etc., ya que no aportan valor predictivo, a menos que el usuario indique lo contrario.
-    - Lematización estratégica: Observa las muestras de datos. Si una columna categórica contiene frases, etiquetas separadas por espacios (ej: "acción drama terror") o descripciones largas, DEBES proponer "Lematizar": true.
-    
-    REGLA DE IDENTIDAD Y FIRMA (OBLIGATORIO):
-    - Está TERMINANTEMENTE PROHIBIDO despedirse usando firmas genéricas con placeholders como "[Su Nombre/Título]", "Consultor Senior de Data Science" o similares.
-    - Si decides firmar tu respuesta al final, hazlo única y exclusivamente como "Autopilot". Ejemplo: "Atentamente,\nAutopilot".
-    """
-    return _enviar_mensaje_ia(chat_session, interp_prompt, "Perfilamiento de Datos")
-
-def _enviar_mensaje_ia(chat_session, prompt, titulo_log):
-    print("\n" + "="*60)
-    print(f"PROMPT ENVIADO A LA IA ({titulo_log}):")
-    print("="*60)
-    print(prompt[:1000] + "..." if len(prompt) > 1000 else prompt)
-    print("="*60 + "\n")
-    
-    response = chat_session.send_message(prompt)
-    
-    print("\n" + "="*60)
-    print(f"RESPUESTA DE LA IA ({titulo_log}):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
-    
-    return response.text
-
-def texto_a_dataframe(chat_session, texto_usuario, dtypes_dict):
-    prompt = f"""
-    Eres un experto en extracción de datos.
-    Se requiere convertir la descripción en lenguaje natural de un usuario en un registro de datos estructurado.
-    Las columnas originales del dataset y sus tipos de datos (dtypes) son:
-    {json.dumps(dtypes_dict)}
-    
-    Descripción del usuario: "{texto_usuario}"
-    
-    Tu tarea:
-    1. Extrae la información del texto y mapeala a las columnas dadas. 
-    2. Si un dato no se menciona en absoluto y no se puede inferir, usa null para rellenarlo (el pipeline se encargará de imputarlo).
-    3. Devuelve ÚNICAMENTE un bloque de código JSON válido donde las claves son los nombres de las columnas.
-    """
-    print("\n" + "="*60)
-    print("PROMPT ENVIADO A LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(prompt)
-    print("="*60 + "\n")
-    
-    response = chat_session.send_message(prompt)
-    
-    print("\n" + "="*60)
-    print("RESPUESTA DE LA IA (Texto a DataFrame):")
-    print("="*60)
-    print(response.text)
-    print("="*60 + "\n")
-    
-    import re
-    json_match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_str = response.text.replace('```', '').strip()
-        # Intentar extraer solo lo que parece un diccionario
-        dict_match = re.search(r"(\{.*?\})", json_str, re.DOTALL)
-        if dict_match:
-            json_str = dict_match.group(1)
+    with col1:
+        hechos = st.file_uploader("Dataset principal (Tabla de hechos)", type=["csv", "xlsx"])
+        if hechos:
+            st.success(f"✅ Dataset principal listo: **{hechos.name}**")
             
-    datos_json = json.loads(json_str)
-    return pd.DataFrame([datos_json])
+    with col2:
+        dimensiones = st.file_uploader("Dimensiones (Opcional)", type=["csv", "xlsx"], accept_multiple_files=True)
+        if dimensiones:
+            st.success(f"✅ {len(dimensiones)} archivos de dimensiones listos")
+            
+    with col3:
+        uploaded_dict = st.file_uploader("Diccionario de datos (Opcional)", type=["csv", "xlsx", "json", "txt"], key="dict_uploader")
+        if uploaded_dict:
+            dict_key = f"dict_loaded_{uploaded_dict.name}_{uploaded_dict.size}"
+            if st.session_state.get("last_uploaded_dict") != dict_key:
+                with st.spinner("Procesando diccionario de datos..."):
+                    try:
+                        if uploaded_dict.name.endswith(".csv"):
+                            try:
+                                df_dict = pd.read_csv(uploaded_dict, encoding="utf-8")
+                            except UnicodeDecodeError:
+                                uploaded_dict.seek(0)
+                                df_dict = pd.read_csv(uploaded_dict, encoding="latin1")
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".xlsx"):
+                            df_dict = pd.read_excel(uploaded_dict)
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".json"):
+                            try:
+                                df_dict = pd.read_json(uploaded_dict)
+                            except ValueError:
+                                uploaded_dict.seek(0)
+                                df_dict = pd.read_json(uploaded_dict, lines=True)
+                            st.session_state.data_dict_content = df_dict.to_markdown(index=False)
+                        elif uploaded_dict.name.endswith(".txt"):
+                            st.session_state.data_dict_content = uploaded_dict.read().decode("utf-8", errors="ignore")
+                        
+                        st.session_state.data_dict_name = uploaded_dict.name
+                        st.session_state.last_uploaded_dict = dict_key
+                        st.success(f"✅ Diccionario cargado con éxito: **{uploaded_dict.name}**")
+                    except Exception as e:
+                        st.error(f"Error al procesar el diccionario de datos: {e}")
+            else:
+                st.success(f"✅ Diccionario activo: **{st.session_state.data_dict_name}**")
+            
+            if st.button("Eliminar Diccionario", use_container_width=True):
+                st.session_state.data_dict_content = None
+                st.session_state.data_dict_name = None
+                st.session_state.last_uploaded_dict = None
+                st.rerun()
+        else:
+            st.session_state.data_dict_content = None
+            st.session_state.data_dict_name = None
+            st.session_state.last_uploaded_dict = None
 
-# --- CONFIGURACIÓN GCP ---
-GCS_BUCKET = "archivos_back"
-PROJECT    = "project-6d52cafa-4432-4186-aeb"
-DATASET    = "Cubo"
-CF_URL     = "https://armar-cubo-697875837946.northamerica-south1.run.app"
+    # El botón se activa solo cuando el Dataset principal está cargado
+    puede_construir = hechos is not None
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
+    with col_btn_center:
+        if st.button("🚀 Cargar y construir cubo", use_container_width=True, type="primary", disabled=not puede_construir):
+            try:
+                # Resetear estados de propuesta previos
+                st.session_state.proposal = None
+                st.session_state.config_pipeline = None
+                st.session_state.results = None
+                st.session_state.cleaner = None
+                st.session_state.messages_propuesta = []
+                st.session_state.messages_resultados = []
+                st.session_state.proposal_update_notice = False
+                st.session_state.chat_session = iniciar_chat()
+                st.session_state.chat_resultados_session = iniciar_chat()
 
-def subir_a_gcs(archivo, carpeta):
-    client = get_storage_client()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(f"{carpeta}/{archivo.name}")
-    blob.upload_from_file(archivo, rewind=True)
+                # Paso 1: subir a GCS
+                with st.spinner("Subiendo archivos a Cloud Storage..."):
+                    subir_a_gcs(hechos, "Tabla_hechos")
+                    if dimensiones:
+                        for dim in dimensiones:
+                            subir_a_gcs(dim, "Dimensiones")
+                st.success("Archivos subidos a Cloud Storage")
 
-def tabla_existe_en_bq(tabla_id):
-    client = get_bq_client()
-    try:
-        client.get_table(f"{PROJECT}.{DATASET}.{tabla_id}")
-        return True
-    except Exception:
-        return False
+                # Paso 2: esperar que el trigger cargue a BigQuery
+                nombres_esperados = ["hechos_raw"]
+                if dimensiones:
+                    nombres_esperados += [
+                        f"dim_{dim.name.split('.')[0].upper()}_raw"
+                        for dim in dimensiones
+                    ]
+                
+                with st.spinner("Esperando carga en BigQuery..."):
+                    ok = esperar_tablas_bq(nombres_esperados)
 
-def leer_cubo_de_bq():
-    client = get_bq_client()
-    query = f"SELECT * FROM `{PROJECT}.{DATASET}.cubo_analitico`"
-    job_config = bigquery.QueryJobConfig()
-    return client.query(
-        query,
-        job_config=job_config,
-        location="northamerica-south1"
-    ).to_dataframe()
+                if not ok:
+                    st.error("Timeout: las tablas no aparecieron en BigQuery. Revisa los logs.")
+                    st.stop()
+                st.success("Tablas cargadas en BigQuery")
 
-def esperar_tablas_bq(nombres_tablas, timeout=120, intervalo=5):
-    inicio = time.time()
-    while time.time() - inicio < timeout:
-        if all(tabla_existe_en_bq(t) for t in nombres_tablas):
-            return True
-        time.sleep(intervalo)
-    return False
+                # Paso 3: construir la vista
+                with st.spinner("Construyendo cubo analítico..."):
+                    ok, resultado = llamar_build_cubo()
 
-def llamar_build_cubo():
-    try:
-        import google.auth
-        import google.auth.transport.requests
+                if not ok:
+                    st.error(f"Error al construir el cubo: {resultado}")
+                    st.stop()
+                st.success("Cubo construido con éxito")
 
-        credentials, project = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        auth_req = google.auth.transport.requests.Request()
-        credentials.refresh(auth_req)
+                # Paso 4: leer el cubo a dataframe para el resto del flujo
+                with st.spinner("Cargando datos para análisis..."):
+                    st.session_state.df = leer_cubo_de_bq()
+
+                st.session_state.phase = "PROPUESTA"
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Error en el proceso: {str(e)}")
+
+elif st.session_state.phase == "PROPUESTA":
+    tab1, tab2 = st.tabs(["Estrategia de IA", "Reporte de Datos"])
+
+    with tab1:
+        if not st.session_state.messages_propuesta:
+            with st.spinner("El agente esta disenando la estrategia inicial..."):
+                initial_proposal = get_ia_proposal(
+                    st.session_state.chat_session,
+                    st.session_state.df,
+                    is_initial=True,
+                    diccionario_datos=st.session_state.data_dict_content
+                )
+                st.session_state.messages_propuesta.append({"role": "assistant", "content": initial_proposal})
+                st.session_state.proposal = initial_proposal
+        else:
+            if st.session_state.proposal is None:
+                for msg in reversed(st.session_state.messages_propuesta):
+                    if msg["role"] == "assistant":
+                        st.session_state.proposal = msg["content"]
+                        break
+
+        json_str = "{}"
+        for msg in reversed(st.session_state.messages_propuesta):
+            if msg["role"] == "assistant":
+                json_match = re.search(r"```json\s*(\{.*?\})\s*```", msg["content"], re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                    break
+
+        st.markdown("### Chat Estratégico")
         
-        response = requests.post(
-            CF_URL,
-            headers={
-                "Authorization": f"Bearer {credentials.token}",
-                "Content-Type": "application/json"
+        chat_container = st.container(height=450)
+        with chat_container:
+            for msg in st.session_state.messages_propuesta:
+                with st.chat_message(msg["role"]):
+                    content_to_show = re.sub(r"```json.*?```", "", msg["content"], flags=re.DOTALL)
+                    content_to_show = re.sub(r"(?i)-{3,}", "", content_to_show)
+                    content_to_show = re.sub(r"(?i)#+.*?Configuraci[oó]n.*?(?:JSON|Preprocesamiento|T[eé]cnica).*?\n?", "", content_to_show)
+                    content_to_show = re.sub(r"(?i)#+.*?Pipeline.*?\n?", "", content_to_show)
+                    
+                    content_to_show = content_to_show.strip()
+                    if content_to_show:
+                        st.markdown(content_to_show)
+        
+        if user_input := st.chat_input("Escribe tus dudas o pide ajustes al plan..."):
+            st.session_state.messages_propuesta.append({"role": "user", "content": user_input})
+            with st.spinner("Procesando tu solicitud..."):
+                instruction = f"Usa este json como base para modificaciones si aplica: {json_str}. El usuario dice: {user_input}"
+                response = get_ia_proposal(
+                    st.session_state.chat_session,
+                    st.session_state.df,
+                    feedback=instruction,
+                    diccionario_datos=st.session_state.data_dict_content
+                )
+                st.session_state.messages_propuesta.append({"role": "assistant", "content": response})
+                st.session_state.proposal = response
+                if re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL):
+                    st.session_state.proposal_update_notice = True
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("### Configuracion Tecnica")
+        try:
+            conf_data = json.loads(json_str) if json_str != "{}" else {}
+            target_detectado, reglas_detectadas, modelo_detectado, es_pca_detectado, n_clusters_detectado = extraer_configuracion_pipeline(conf_data)
+            opciones_modelos = list(MODELOS_DISPONIBLES.keys())
+            modelo_seleccionado = st.selectbox(
+                "Modelo detectado",
+                opciones_modelos,
+                index=opciones_modelos.index(modelo_detectado) if modelo_detectado in opciones_modelos else 0,
+            )
+            conf_data["modelo"] = modelo_seleccionado
+            conf_data["tipo_modelo"] = modelo_seleccionado
+
+            if MODELOS_DISPONIBLES[modelo_seleccionado]["tipo_problema"] == "clustering":
+                n_clusters_mostrado = str(n_clusters_detectado) if n_clusters_detectado else "AUTO"
+                st.markdown(f"**Número de Clusters:** `{n_clusters_mostrado}`")
+                target_validacion = None
+            else:
+                target_mostrado = target_detectado if target_detectado else "⚠️ Pendiente de definir"
+                st.markdown(f"**Variable Objetivo:** `{target_mostrado}`")
+                target_validacion = target_detectado
+            st.markdown(f"**Modelo sugerido:** `{modelo_seleccionado}`")
+            st.markdown(f"**Metricas esperadas:** `{', '.join(obtener_metricas_esperadas(modelo_seleccionado))}`")
+
+            es_valido, mensaje_validacion = validar_tipo_problema(
+                st.session_state.df, target_validacion, modelo_seleccionado
+            )
+            if es_valido:
+                st.success(f"Validacion del problema: {mensaje_validacion}")
+            else:
+                st.error(f"Validacion del problema: {mensaje_validacion}")
+
+            # --- LIMPIEZA DE RESULTADOS PREVIOS AL CAMBIAR MODELO O REGLAS ---
+            actual_reglas = conf_data.get("reglas_dict", {})
+            if st.session_state.results is not None:
+                modelo_cambio = st.session_state.results.get("tipo_modelo") != modelo_seleccionado
+                reglas_cambio = st.session_state.results.get("reglas") != actual_reglas
+                
+                if modelo_cambio or reglas_cambio:
+                    st.session_state.results = None
+                    st.session_state.messages_resultados = []
+                    st.session_state.chat_resultados_session = iniciar_chat()
+
+            puede_ejecutar = es_valido and MODELOS_DISPONIBLES[modelo_seleccionado]["implementado"]
+
+            st.markdown("#### Tratamiento de nulos y columnas")
+            if st.session_state.get("proposal_update_notice"):
+                st.success("Las propuestas de limpieza fueron actualizadas correctamente.")
+
+            if reglas_detectadas:
+                table_data = []
+                for col, params in reglas_detectadas.items():
+                    params_validos = isinstance(params, dict)
+                    metodo_usado = params.get("metodo", "AUTO") if params_validos else "AUTO"
+                    metodo_normalizado = str(metodo_usado).lower()
+
+                    if metodo_normalizado in ["mean", "median", "mode", "media", "mediana", "moda", "auto", "imputar", "imputacion", "imputación"]:
+                        tratamiento_str = "Imputacion"
+                    elif metodo_normalizado == "drop-column":
+                        tratamiento_str = "Eliminar Columna"
+                    else:
+                        tratamiento_str = "Imputacion"
+
+                    if col in st.session_state.df.columns:
+                        if metodo_normalizado == "drop-column":
+                            conteo_datos = f"{len(st.session_state.df)} filas"
+                        elif params_validos and (
+                            params.get("Dummies") or params.get("TargetEncoding") or params.get("Ordinal") or params.get("WOE")
+                        ):
+                            conteo_datos = f"{st.session_state.df[col].nunique(dropna=True)} valores unicos"
+                        else:
+                            conteo_datos = f"{int(st.session_state.df[col].isna().sum())} nulos"
+                    else:
+                        conteo_datos = "Columna no encontrada"
+
+                    table_data.append(
+                        {
+                            "Columna": col,
+                            "Tratamiento": tratamiento_str,
+                            "Estado": "Listo" if params_validos else "Revisar",
+                            "Conteo/Datos": conteo_datos,
+                            "Dummies": "Si" if params_validos and params.get("Dummies") else "No",
+                        }
+                    )
+                st.table(pd.DataFrame(table_data))
+                with st.expander("Que significa esta tabla"):
+                    st.markdown(
+                        """
+                        - **Tratamiento:** accion que se aplicara a la columna, por ejemplo rellenar datos faltantes, eliminar una columna o transformar categorias.
+                        - **Estado:** indica si la propuesta esta lista para ejecutarse o si necesita revision porque la configuracion no se pudo interpretar bien.
+                        - **Conteo/Datos:** muestra cuantos registros o valores se veran afectados; por ejemplo, nulos por rellenar, filas asociadas a una eliminacion o valores unicos que se transformaran.
+                        """
+                    )
+        except Exception as e:
+            conf_data = {}
+            puede_ejecutar = False
+            st.error(f"Error en configuracion JSON: {e}")
+
+        col_empty, col_exec = st.columns([3, 1])
+        with col_exec:
+            if st.button(" Ejecutar Pipeline", use_container_width=True, disabled=not puede_ejecutar, key="btn_ejecutar_pipeline"):
+                st.session_state.config_pipeline = conf_data
+                st.session_state.phase = "EJECUCION"
+                st.rerun()
+
+    with tab2:
+        st.markdown("### Reporte Exploratorio Detallado")
+        if st.session_state.proposal is None:
+            st.markdown("""
+                <div style="background-color: #1a2c3d; border-left: 5px solid #00f2fe; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <span style="font-size: 20px;">⏳</span> 
+                    <span style="color: #00f2fe; font-weight: 500; margin-left: 10px;">
+                        Por favor espera a que la IA termine de generar la propuesta estratégica antes de ver el reporte de datos.
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            if not st.session_state.report_html:
+                with st.spinner("Generando reporte interactivo de calidad de datos..."):
+                    st.session_state.report_html = AnalizarDatos(st.session_state.df)
+            components.html(st.session_state.report_html, height=1000, scrolling=True)
+
+elif st.session_state.phase == "EJECUCION":
+    conf = st.session_state.config_pipeline
+    try:
+        import os, shutil
+        tiempo_inicio_pipeline = time.time()
+        if os.path.exists("Resultados"):
+            shutil.rmtree("Resultados")
+        if os.path.exists("MODELOS"):
+            shutil.rmtree("MODELOS")
+        os.makedirs("Resultados", exist_ok=True)
+        os.makedirs("MODELOS", exist_ok=True)
+
+        target, reglas, modelo_t, es_pca, n_clusters_fix = extraer_configuracion_pipeline(conf)
+
+        with st.spinner("Iniciando limpieza automatizada..."):
+            cleaner, X, y = aplicar_limpieza_interna(
+                st.session_state.df,
+                col_target=target,
+                reglas_dict=reglas,
+                es_pca=es_pca,
+            )
+            st.session_state.cleaner = cleaner
+
+            try:
+                if y is not None:
+                    df_export = pd.concat([X, y], axis=1)
+                else:
+                    df_export = X.copy()
+                df_export.to_excel("Resultados/dataset_limpio.xlsx", index=False)
+                st.success("Dataset limpio guardado como 'Resultados/dataset_limpio.xlsx'")
+            except Exception as e:
+                st.warning(f"Error al guardar excel: {e}")
+
+        with st.spinner(f"Optimizando y entrenando {modelo_t}..."):
+            X_numeric = X.select_dtypes(include=["number"])
+            cols_eliminadas = set(X.columns) - set(X_numeric.columns)
+            if cols_eliminadas:
+                st.warning(f"Columnas eliminadas por seguridad: {list(cols_eliminadas)}")
+
+            X_numeric = X_numeric.apply(pd.to_numeric, errors="coerce").fillna(0).astype(float)
+            if X_numeric.empty:
+                raise ValueError("No quedaron columnas numericas disponibles para entrenar el modelo.")
+
+            modelo_obj, metricas, cols = orquestador_modelos_interno(X_numeric, y, tipo_modelo=modelo_t, n_clusters_fix=n_clusters_fix)
+            
+            # --- PERFILAMIENTO ESTRATÉGICO (SOLO PARA CLUSTERING) ---
+            perfiles = {}
+            if es_modelo_clustering(modelo_t):
+                try:
+                    df_temp = st.session_state.df.loc[X.index].copy()
+                    if hasattr(modelo_obj, 'labels') and modelo_obj.labels is not None:
+                        labels = modelo_obj.labels
+                    else:
+                        labels = modelo_obj.estimator.labels_ if hasattr(modelo_obj, 'estimator') and modelo_obj.estimator else None
+                    
+                    if labels is None:
+                        raise ValueError("No se pudieron obtener las etiquetas del modelo para el perfilamiento.")
+                    
+                    df_temp['__GRUPO__'] = labels
+                    grupos = df_temp['__GRUPO__'].unique()
+                    
+                    for g in grupos:
+                        df_g = df_temp[df_temp['__GRUPO__'] == g]
+                        desc_num = df_g.describe().to_dict()
+                        cat_freqs = {}
+                        for col in df_g.select_dtypes(include=['object', 'category']).columns:
+                            freq = (df_g[col].value_counts(normalize=True) * 100).round(1).to_dict()
+                            cat_freqs[col] = freq
+                        
+                        perfiles[str(g)] = {
+                            "estadisticas_numericas": desc_num,
+                            "distribucion_categorias": cat_freqs,
+                            "tamaño_grupo": len(df_g)
+                        }
+                except Exception as e:
+                    perfiles = {"error": f"No se pudo generar perfilamiento: {e}"}
+
+            st.session_state.results = {
+                "modelo": modelo_obj,
+                "metricas": metricas,
+                "cols": cols,
+                "tipo_modelo": modelo_t,
+                "target": target,
+                "reglas": reglas,
+                "es_pca": es_pca,
+                "perfiles": perfiles,
+                "tiempo_total_ejecucion": round(time.time() - tiempo_inicio_pipeline, 2)
             }
-        )
-        return response.status_code == 200, response.json()
+
+        st.session_state.phase = "RESULTADOS"
+        st.rerun()
     except Exception as e:
-        return False, str(e)
+        st.error(f"Error en el Pipeline: {e}")
+        if st.button("Reintentar Propuesta"):
+            st.session_state.phase = "PROPUESTA"
+            st.rerun()
 
-def get_bq_client():
-    import google.auth
-    credentials, project = google.auth.default()
-    return bigquery.Client(
-        credentials=credentials,
-        project=PROJECT,
-        location="northamerica-south1"
-    )
+elif st.session_state.phase == "RESULTADOS":
+    res = st.session_state.results
 
-def get_storage_client():
-    import google.auth
-    credentials, project = google.auth.default()
-    return storage.Client(credentials=credentials, project=PROJECT)
+    tipo_modelo = res.get("tipo_modelo", "Regresion_lineal")
+    es_clustering_resultado = es_modelo_clustering(tipo_modelo)
+    es_redes_resultado = es_modelo_redes_neuronales(tipo_modelo)
+    es_knn_resultado = es_modelo_knn(tipo_modelo)
+    es_arbol_resultado = es_modelo_arbol(tipo_modelo)
+    es_logistica_resultado = es_modelo_regresion_logistica(tipo_modelo)
+    es_credit_resultado = es_modelo_credit_scoring(tipo_modelo)
+    metricas_interfaz = ocultar_woe_interfaz(res["metricas"])
 
-def _normalizar_clave_metrica(clave):
-    return str(clave).lower().replace("_", "").replace("-", "").replace(" ", "")
+    tab_res, tab_pred = st.tabs(["📊 Resultados del Modelo", "🔮 Nueva Predicción"])
 
-def _obtener_metrica(metricas, nombres):
-    if not isinstance(metricas, dict):
-        return None
-    objetivo = {_normalizar_clave_metrica(n) for n in nombres}
-    for clave, valor in metricas.items():
-        if _normalizar_clave_metrica(clave) in objetivo:
-            return valor
-    return None
+    with tab_pred:
+        st.markdown("### Nueva Predicción")
+        if not st.session_state.messages_resultados:
+            st.info("⏳ Por favor espera a que la IA termine de analizar los resultados del modelo antes de realizar nuevas predicciones.")
+        else:
+            tab_text, tab_file = st.tabs(["Ingreso por Chat", "Subir Archivo"])
+            
+            with tab_text:
+                texto_pred = st.text_area("Palticame una situacion para predecirla:")
+                if st.button("Predecir desde texto", use_container_width=True):
+                    if texto_pred:
+                        with st.spinner("Interpretando texto y prediciendo..."):
+                            try:
+                                dtypes_dict = st.session_state.df.dtypes.apply(lambda x: str(x)).to_dict()
+                                df_n = texto_a_dataframe(st.session_state.chat_session, texto_pred, dtypes_dict)
+                                
+                                st.write("Datos interpretados por el agente:")
+                                st.dataframe(df_n)
+                                
+                                df_p = st.session_state.cleaner.transformar_nueva_tupla(df_n)
+                                p = res["modelo"].predict(df_p[res["cols"]])
+                                
+                                # Redondear si es numérico
+                                val_pred = p[0]
+                                if isinstance(val_pred, (float, np.float64, np.float32, np.number)):
+                                    val_pred = round(float(val_pred), 4)
+                                    
+                                st.success(f"Resultado predicho: **{val_pred}**")
+                            except Exception as e:
+                                st.error(f"Error en la prediccion por texto: {e}")
+                    else:
+                        st.warning("Por favor ingresa una descripcion.")
+                        
+            with tab_file:
+                uploaded_pred = st.file_uploader("Sube tus nuevos datos para predecir", type=["csv", "xlsx", "json"])
+                if st.button("Predecir desde archivo", use_container_width=True):
+                    if uploaded_pred:
+                        with st.spinner("Procesando y prediciendo..."):
+                            try:
+                                if uploaded_pred.name.endswith(".csv"):
+                                    try:
+                                        df_n = pd.read_csv(uploaded_pred, encoding="utf-8")
+                                    except UnicodeDecodeError:
+                                        uploaded_pred.seek(0)
+                                        df_n = pd.read_csv(uploaded_pred, encoding="latin1")
+                                elif uploaded_pred.name.endswith(".json"):
+                                    try:
+                                        df_n = pd.read_json(uploaded_pred)
+                                    except ValueError:
+                                        uploaded_pred.seek(0)
+                                        df_n = pd.read_json(uploaded_pred, lines=True)
+                                else:
+                                    df_n = pd.read_excel(uploaded_pred)
+                                    
+                                st.write(f"Datos cargados: {df_n.shape[0]} filas")
+                                
+                                df_p = st.session_state.cleaner.transformar_nueva_tupla(df_n)
+                                p = res["modelo"].predict(df_p[res["cols"]])
+                                
+                                df_res = df_n.copy()
+                                # Redondear predicciones si son numéricas
+                                if p.dtype.kind in 'fc': # float o complex
+                                    df_res['Prediccion'] = np.round(p.astype(float), 4)
+                                else:
+                                    df_res['Prediccion'] = p
+                                st.success("Predicciones completadas.")
+                                
+                                st.write("Mostrando los primeros 100 registros:")
+                                st.dataframe(df_res.head(100))
+                                
+                                csv = df_res.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label="📥 Descargar Resultados",
+                                    data=csv,
+                                    file_name="predicciones.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
+                            except Exception as e:
+                                st.error(f"Error en la prediccion por archivo: {e}")
+                    else:
+                        st.warning("Por favor sube un archivo primero.")
 
-def _formatear_metrica(valor):
-    if valor is None:
-        return "N/D"
-    if isinstance(valor, (int, np.integer)):
-        return f"{int(valor):,}"
-    if isinstance(valor, (float, np.floating)):
-        return f"{float(valor):,.4f}"
-    return str(valor)
+    with tab_res:
+        st.markdown("### Interpretación y Análisis Estratégico")
+        
+        if not st.session_state.messages_resultados:
+            with st.spinner("Analizando resultados del modelo..."):
+                if es_clustering_resultado:
+                    tarea = "Analiza la calidad de separacion, numero optimo de clusters y oportunidades de segmentacion."
+                elif es_credit_resultado:
+                    tarea = "Analiza KS, Gini, ROC-AUC, segmentos de riesgo y scorecard."
+                elif es_logistica_resultado:
+                    tarea = "Analiza metricas, class_weight, curva ROC, matriz de confusion y coeficientes."
+                elif es_arbol_resultado:
+                    tarea = "Analiza si se eligio arbol o RandomForest, metricas e importancia de variables."
+                elif es_knn_resultado:
+                    tarea = "Analiza K, weights, distancia, metricas y curva error vs K."
+                elif es_redes_resultado:
+                    tarea = "Analiza si resolvio clasificacion o regresion, metricas y curva de perdida."
+                else:
+                    tarea = "Analiza relevancia, fiabilidad, metricas e impacto de negocio."
 
-def _tipo_resultado_dashboard(metricas, es_clustering):
-    tipo = str(metricas.get("tipo_problema", "")).lower() if isinstance(metricas, dict) else ""
-    if es_clustering:
-        return "clustering"
-    if "regresion" in tipo or "regression" in tipo:
-        return "regresion"
-    if "forecast" in tipo or "sarima" in tipo:
-        return "forecasting"
-    return "clasificacion"
+                if es_clustering_resultado:
+                    explicacion = interpretar_resultados_perfilarDatos(
+                        st.session_state.chat_resultados_session,
+                        metricas_interfaz,
+                        res['cols'],
+                        res.get('perfiles', {}),
+                        tarea
+                    )
+                else:
+                    explicacion = interpretar_resultados(
+                        st.session_state.chat_resultados_session,
+                        metricas_interfaz,
+                        res['cols'],
+                        tarea
+                    )
+                st.session_state.messages_resultados.append({"role": "assistant", "content": explicacion})
+                st.rerun()
 
-def _metricas_dashboard(metricas, es_clustering):
-    metricas_precision = metricas.get("metricas_precision", {}) if isinstance(metricas, dict) else {}
-    tipo = _tipo_resultado_dashboard(metricas, es_clustering)
+        cleaner_actual = st.session_state.cleaner
+        resumen_pipeline = _resumen_tecnico_pipeline(res, cleaner_actual, st.session_state.df)
+        metricas_clave_dashboard = _metricas_dashboard(metricas_interfaz, es_clustering_resultado)
+        columnas_eliminadas = resumen_pipeline["columnas_eliminadas"]
 
-    if tipo == "clustering":
-        return [
-            ("Silhouette Score", _obtener_metrica(metricas_precision, ["Silhouette Score", "silhouette"])),
-            ("Davies Bouldin", _obtener_metrica(metricas_precision, ["Davies-Bouldin Index", "Davies Bouldin"])),
-            ("Numero de clusters", metricas.get("mejor_numero_clusters") or metricas.get("n_clusters")),
+        _render_metricas_clave(metricas_clave_dashboard)
+
+        resumen_cols = st.columns(5)
+        resumen_cols[0].metric("Columnas usadas", _formatear_metrica(resumen_pipeline["columnas_usadas"]))
+        resumen_cols[1].metric("Columnas eliminadas", _formatear_metrica(len(columnas_eliminadas)))
+        resumen_cols[2].metric("Outliers tratados", _formatear_metrica(resumen_pipeline["outliers_corregidos"]))
+        resumen_cols[3].metric("Nulos tratados", _formatear_metrica(resumen_pipeline["nulos_tratados"]))
+        if resumen_pipeline["tiempo_total"] != "N/D":
+            resumen_cols[4].metric("Tiempo total", f"{resumen_pipeline['tiempo_total']} s")
+
+        if es_clustering_resultado:
+            metricas_cluster = metricas_interfaz
+            st.markdown("#### Resultados de Clustering")
+            st.write(f"**Algoritmo seleccionado:** {metricas_cluster.get('modelo_seleccionado')}")
+            st.write(f"**Mejor numero de clusters:** {metricas_cluster.get('mejor_numero_clusters')}")
+
+            visualizaciones = metricas_cluster.get("visualizaciones", {})
+            col_img1, col_img2 = st.columns(2)
+            with col_img1:
+                if visualizaciones.get("scatter_clusters"):
+                    st.image(visualizaciones["scatter_clusters"], caption="Scatter de clusters")
+                if visualizaciones.get("dendrograma"):
+                    st.image(visualizaciones["dendrograma"], caption="Dendrograma")
+            with col_img2:
+                if visualizaciones.get("elbow_chart"):
+                    st.image(visualizaciones["elbow_chart"], caption="Metodo del codo")
+
+            with st.expander("Comparacion de algoritmos"):
+                st.json(metricas_cluster.get("metricas_por_algoritmo", []))
+        else:
+            if es_redes_resultado:
+                metricas_red = metricas_interfaz
+                st.markdown("#### Resultados de Redes Neuronales")
+                st.write(f"**Tipo de problema:** {metricas_red.get('tipo_problema')}")
+                visualizaciones = metricas_red.get("visualizaciones", {})
+                col_nn1, col_nn2 = st.columns(2)
+                with col_nn1:
+                    if visualizaciones.get("perdida"):
+                        st.image(visualizaciones["perdida"], caption="Curva de perdida")
+                    if visualizaciones.get("curva_roc"):
+                        st.image(visualizaciones["curva_roc"], caption="Curva ROC")
+                with col_nn2:
+                    if visualizaciones.get("matriz_confusion"):
+                        st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusion")
+                    if visualizaciones.get("real_vs_prediccion"):
+                        st.image(visualizaciones["real_vs_prediccion"], caption="Real vs prediccion")
+
+            if es_knn_resultado:
+                metricas_knn = metricas_interfaz
+                st.markdown("#### Resultados de KNN")
+                st.write(f"**Tipo de problema:** {metricas_knn.get('tipo_problema')}")
+                visualizaciones = metricas_knn.get("visualizaciones", {})
+                col_knn1, col_knn2 = st.columns(2)
+                with col_knn1:
+                    if visualizaciones.get("error_vs_k"):
+                        st.image(visualizaciones["error_vs_k"], caption="Error vs K")
+                    if visualizaciones.get("matriz_confusion"):
+                        st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusion")
+                with col_knn2:
+                    if visualizaciones.get("real_vs_prediccion"):
+                        st.image(visualizaciones["real_vs_prediccion"], caption="Prediccion vs valores reales")
+
+            if es_arbol_resultado:
+                metricas_arbol = metricas_interfaz
+                st.markdown("#### Resultados de Arboles")
+                st.write(f"**Modelo seleccionado:** {metricas_arbol.get('modelo_seleccionado')}")
+                st.write(f"**Tipo de problema:** {metricas_arbol.get('tipo_problema')}")
+                visualizaciones = metricas_arbol.get("visualizaciones", {})
+                col_tree1, col_tree2 = st.columns(2)
+                with col_tree1:
+                    if visualizaciones.get("arbol"):
+                        st.image(visualizaciones["arbol"], caption="Arbol")
+                    if visualizaciones.get("matriz_confusion"):
+                        st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusion")
+                with col_tree2:
+                    if visualizaciones.get("feature_importance"):
+                        st.image(visualizaciones["feature_importance"], caption="Feature importance")
+
+            if es_logistica_resultado:
+                metricas_log = metricas_interfaz
+                st.markdown("#### Resultados de Regresion Logistica")
+                st.write(f"**Tipo de problema:** {metricas_log.get('tipo_problema')}")
+                visualizaciones = metricas_log.get("visualizaciones", {})
+                col_log1, col_log2 = st.columns(2)
+                with col_log1:
+                    if visualizaciones.get("curva_roc"):
+                        st.image(visualizaciones["curva_roc"], caption="Curva ROC")
+                    if visualizaciones.get("matriz_confusion"):
+                        st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusion")
+                with col_log2:
+                    if visualizaciones.get("coeficientes"):
+                        st.image(visualizaciones["coeficientes"], caption="Coeficientes")
+
+            if es_credit_resultado:
+                metricas_credit = metricas_interfaz
+                st.markdown("#### Resultados de Credit Scoring")
+                st.write(f"**Tipo de problema:** {metricas_credit.get('tipo_problema')}")
+                visualizaciones = metricas_credit.get("visualizaciones", {})
+                col_credit1, col_credit2 = st.columns(2)
+                with col_credit1:
+                    if visualizaciones.get("score_distribution"):
+                        st.image(visualizaciones["score_distribution"], caption="Distribucion de score")
+                    if visualizaciones.get("curva_roc"):
+                        st.image(visualizaciones["curva_roc"], caption="Curva ROC")
+                    if visualizaciones.get("matriz_confusion"):
+                        st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusion")
+                with col_credit2:
+                    if visualizaciones.get("segmentos_riesgo"):
+                        st.image(visualizaciones["segmentos_riesgo"], caption="Segmentos de riesgo")
+                    if visualizaciones.get("coeficientes"):
+                        st.image(visualizaciones["coeficientes"], caption="Coeficientes")
+
+        st.markdown("### Chat de Resultados")
+        chat_container_res = st.container(height=400)
+        with chat_container_res:
+            for msg in st.session_state.messages_resultados:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+        from CODIGO.Funcionalidades import chat_resultados_ia_stream, build_model_context_prompt
+        
+        # Preparar contexto para la IA
+        model_info = {
+            "tipo_modelo":   tipo_modelo,
+            "variable_obj":  res.get("target") if res.get("target") else "No requerida",
+            "metricas":      res["metricas"].get("metricas_precision", {}),
+            "n_registros":   len(st.session_state.df),
+            "n_features":    len(res["cols"]),
+            "clases":        res["metricas"].get("clases_detectadas", []),
+            "encodings":     [k for k, v in res.get("reglas", {}).items() if v.get("Dummies") or v.get("TargetEncoding") or v.get("Ordinal") or v.get("WOE")],
+            "pca_aplicado":  res.get("es_pca", False),
+            "grid_search":   True,
+            "perfilamiento_grupos": res.get("perfiles", {})
+        }
+        context_prompt = build_model_context_prompt(model_info)
+
+        # Chips de preguntas rápidas
+        CHIPS = [
+            "¿Cómo interpreto estas métricas?",
+            "¿Hay riesgo de overfitting?",
+            "¿Qué features son más importantes?",
+            "¿Cómo puedo mejorar el modelo?",
+            "Explica el preprocesamiento aplicado",
+            "Traduce los resultados a lenguaje de negocio",
         ]
-    if tipo == "regresion":
-        return [
-            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
-            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
-            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
-            ("R²", _obtener_metrica(metricas_precision, ["R2", "R²"])),
-        ]
-    if tipo == "forecasting":
-        return [
-            ("MAE", _obtener_metrica(metricas_precision, ["MAE"])),
-            ("RMSE", _obtener_metrica(metricas_precision, ["RMSE"])),
-            ("MSE", _obtener_metrica(metricas_precision, ["MSE"])),
-            ("MAPE", _obtener_metrica(metricas_precision, ["MAPE"])),
-        ]
-    return [
-        ("Accuracy", _obtener_metrica(metricas_precision, ["Accuracy"])),
-        ("Precision", _obtener_metrica(metricas_precision, ["Precision"])),
-        ("Recall", _obtener_metrica(metricas_precision, ["Recall"])),
-        ("F1 Score", _obtener_metrica(metricas_precision, ["F1-Score", "F1", "F1 Score"])),
-        ("ROC-AUC", _obtener_metrica(metricas_precision, ["ROC-AUC", "ROC AUC"])),
-        ("PR-AUC", _obtener_metrica(metricas_precision, ["PR-AUC", "PR AUC"])),
-    ]
+        
+        st.markdown("**Preguntas rápidas:**")
+        cols_chips = st.columns(len(CHIPS))
+        pregunta_chip = None
+        for i, chip in enumerate(CHIPS):
+            if cols_chips[i].button(chip, key=f"chip_{i}", use_container_width=True):
+                pregunta_chip = chip
 
-def _contar_logs(logs, patrones):
-    total = 0
-    for log in logs:
-        accion = str(log.get("accion", "")).lower()
-        if any(p in accion for p in patrones):
-            total += 1
-    return total
+        if user_input_res := st.chat_input("Pregunta dudas sobre el modelo, métricas o negocio...") or pregunta_chip:
+            pregunta_final = user_input_res if user_input_res else pregunta_chip
+            st.session_state.messages_resultados.append({"role": "user", "content": pregunta_final})
+            
+            # Mostrar el mensaje del usuario inmediatamente antes del stream
+            with chat_container_res:
+                with st.chat_message("user"):
+                    st.markdown(pregunta_final)
+            
+            with chat_container_res:
+                with st.chat_message("assistant"):
+                    response_stream = chat_resultados_ia_stream(
+                        st.session_state.chat_resultados_session, 
+                        pregunta_final, 
+                        context_prompt
+                    )
+                    if response_stream:
+                        respuesta_completa = st.write_stream(chunk.text for chunk in response_stream if hasattr(chunk, "text"))
+                        st.session_state.messages_resultados.append({"role": "assistant", "content": respuesta_completa})
+            st.rerun()
 
-def _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales):
-    eliminadas = set(columnas_originales) - set(columnas_finales)
-    for log in logs:
-        accion = str(log.get("accion", "")).lower()
-        col = log.get("columna")
-        if col and col != "__dataset__" and ("eliminacion_columna" in accion or "borrada" in accion):
-            eliminadas.add(col)
-    return sorted(eliminadas)
-
-def _resumen_tecnico_pipeline(res, cleaner, df_original):
-    logs = getattr(cleaner, "logs_limpieza", []) if cleaner is not None else []
-    columnas_originales = list(df_original.columns) if df_original is not None else []
-    columnas_finales = list(getattr(cleaner, "df", pd.DataFrame()).columns) if cleaner is not None else []
-    columnas_usadas = res.get("cols", [])
-    eliminadas = _columnas_eliminadas_desde_logs(logs, columnas_originales, columnas_finales + [res.get("target")])
-
-    return {
-        "columnas_originales": len(columnas_originales),
-        "columnas_usadas": len(columnas_usadas),
-        "columnas_eliminadas": eliminadas,
-        "nulos_tratados": _contar_logs(logs, ["imputacion", "eliminacion_filas_nulas"]),
-        "outliers_corregidos": _contar_logs(logs, ["outliers_recortados"]),
-        "categoricas_codificadas": _contar_logs(logs, ["dummies", "target_encoding", "ordinal_encoding", "woe"]),
-        "tiempo_total": res.get("tiempo_total_ejecucion", "N/D"),
-        "logs": logs,
-    }
-
-def _render_metricas_clave(metricas_filtradas):
-    visibles = [(nombre, valor) for nombre, valor in metricas_filtradas if valor is not None]
-    if not visibles:
-        return
-    for inicio in range(0, len(visibles), 4):
-        cols_metricas = st.columns(min(4, len(visibles) - inicio))
-        for col_ui, (nombre, valor) in zip(cols_metricas, visibles[inicio:inicio + 4]):
-            col_ui.metric(nombre, _formatear_metrica(valor))
