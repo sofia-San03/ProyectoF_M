@@ -238,6 +238,165 @@ div[data-testid="stHorizontalBlock"] {
 
 .ae-avatar:hover { transform: scale(1.1); }
 
+/* Linear regression AutoML dashboard */
+.lm-dashboard-title {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px;
+    margin: 8px 0 16px 0;
+    border: 1px solid rgba(78,222,163,.18);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(78,222,163,.08), rgba(56,189,248,.06));
+}
+
+.lm-dashboard-title span {
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.lm-dashboard-title small {
+    color: var(--text-tertiary);
+    font-size: .82rem;
+}
+
+.lm-kpi-accent {
+    height: 3px;
+    border-top: 3px solid var(--brand-primary);
+    border-radius: 999px;
+    margin: 0 0 6px 0;
+    box-shadow: 0 0 14px rgba(78,222,163,.18);
+}
+
+.lm-insight-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    margin: 10px 0;
+    background: rgba(15,20,25,.92);
+    border: 1px solid rgba(255,255,255,.07);
+    border-left: 4px solid var(--brand-primary);
+    border-radius: 8px;
+    color: var(--text-secondary);
+}
+
+.lm-insight-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    box-shadow: 0 0 12px currentColor;
+    flex: 0 0 auto;
+}
+
+.lm-pipeline-step {
+    min-height: 92px;
+    margin: 8px 6px 12px 0;
+    padding: 13px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(15,20,25,.88);
+}
+
+.lm-pipeline-step span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: .68rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+
+.lm-pipeline-step.active span {
+    color: #04120d;
+    background: var(--brand-primary);
+}
+
+.lm-pipeline-step.muted span {
+    color: var(--text-muted);
+    background: rgba(255,255,255,.08);
+}
+
+.lm-pipeline-step strong {
+    display: block;
+    color: var(--text-primary);
+    font-size: .9rem;
+    line-height: 1.25;
+}
+
+.lm-pipeline-step small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-tertiary);
+    font-size: .75rem;
+}
+
+.lm-ai-hero {
+    padding: 18px 20px;
+    margin: 6px 0 18px 0;
+    border: 1px solid rgba(78,222,163,.20);
+    border-radius: 10px;
+    background:
+        linear-gradient(135deg, rgba(78,222,163,.12), rgba(59,130,246,.08)),
+        rgba(15,20,25,.92);
+}
+
+.lm-ai-label {
+    display: inline-flex;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(78,222,163,.12);
+    color: var(--brand-primary);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+}
+
+.lm-ai-hero h3 {
+    margin: 10px 0 6px 0;
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+}
+
+.lm-ai-hero p {
+    margin: 0;
+    color: var(--text-tertiary);
+    font-size: .9rem;
+}
+
+.lm-ai-summary {
+    display: grid;
+    gap: 6px;
+    padding: 14px 16px;
+    margin: 8px 0 14px 0;
+    border: 1px solid rgba(56,189,248,.22);
+    border-left: 4px solid var(--status-info);
+    border-radius: 8px;
+    background: rgba(56,189,248,.07);
+}
+
+.lm-ai-summary strong {
+    color: #bfdbfe;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+
+.lm-ai-summary span {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
 /* ── 7. STEPPER ────────────────────────────────────────────── */
 .ae-stepper {
     display: flex;

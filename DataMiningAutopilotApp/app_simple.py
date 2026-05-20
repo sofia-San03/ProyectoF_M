@@ -59,6 +59,7 @@ from CODIGO.Funcionalidades import (
     chat_resultados_ia_stream,
     build_model_context_prompt,
 )
+from CODIGO.ModelDashboard import render_model_dashboard
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -1196,196 +1197,14 @@ def _render_workspace():
         metricas_clave_dashboard = _metricas_dashboard(metricas_interfaz, es_clustering_resultado)
         columnas_eliminadas = resumen_pipeline["columnas_eliminadas"]
 
-        # ── Compact results header ────────────────────────────
-        col_info, col_btns = st.columns([3, 1])
-        with col_info:
-            target_display = res.get("target") or "No requerida"
-            n_reg_display = len(st.session_state.df) if st.session_state.df is not None else 0
-            st.markdown(
-                f'<div class="ae-results-header">'
-                f'<span class="ae-results-model">{tipo_modelo}</span>'
-                f'<span class="ae-results-meta">'
-                f'Target: <code>{target_display}</code> · {n_reg_display:,} registros'
-                f'</span></div>',
-                unsafe_allow_html=True,
-            )
-        with col_btns:
-            bc1, bc2 = st.columns(2)
-            with bc1:
-                if st.button("🔮 Predecir", key="btn_pred_hdr", use_container_width=True, type="primary"):
-                    _prediction_modal()
-            with bc2:
-                if st.session_state.df is not None:
-                    csv_export = st.session_state.df.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        "📥 Exportar",
-                        data=csv_export,
-                        file_name="dataset.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        key="btn_export_hdr",
-                    )
-
-        # ── KPI cards ─────────────────────────────────────────
-        _render_metricas_clave(metricas_clave_dashboard)
-
-        # Pipeline summary row
-        resumen_cols = st.columns(5)
-        resumen_cols[0].metric("Columnas usadas", _formatear_metrica(resumen_pipeline["columnas_usadas"]))
-        resumen_cols[1].metric("Eliminadas", _formatear_metrica(len(columnas_eliminadas)))
-        resumen_cols[2].metric("Outliers", _formatear_metrica(resumen_pipeline["outliers_corregidos"]))
-        resumen_cols[3].metric("Nulos tratados", _formatear_metrica(resumen_pipeline["nulos_tratados"]))
-        if resumen_pipeline["tiempo_total"] != "N/D":
-            resumen_cols[4].metric("Tiempo", f"{resumen_pipeline['tiempo_total']} s")
-
-        # ── Analysis tabs ─────────────────────────────────────
-        tab_perf, tab_pipe, tab_ins = st.tabs(
-            ["📊 Performance", "🔍 Pipeline", "💡 Insights IA"]
+        render_model_dashboard(
+            res=res,
+            df_original=st.session_state.df,
+            resumen_pipeline=resumen_pipeline,
+            ia_messages=st.session_state.messages_resultados,
+            on_predict=_prediction_modal,
         )
-
-        with tab_perf:
-            if es_clustering_resultado:
-                metricas_cluster = metricas_interfaz
-                st.markdown("#### Resultados de Clustering")
-                st.write(f"**Algoritmo:** {metricas_cluster.get('modelo_seleccionado')}")
-                st.write(f"**Mejor número de clusters:** {metricas_cluster.get('mejor_numero_clusters')}")
-
-                visualizaciones = metricas_cluster.get("visualizaciones", {})
-                col_img1, col_img2 = st.columns(2)
-                with col_img1:
-                    if visualizaciones.get("scatter_clusters"):
-                        st.image(visualizaciones["scatter_clusters"], caption="Scatter de clusters")
-                    if visualizaciones.get("dendrograma"):
-                        st.image(visualizaciones["dendrograma"], caption="Dendrograma")
-                with col_img2:
-                    if visualizaciones.get("elbow_chart"):
-                        st.image(visualizaciones["elbow_chart"], caption="Método del codo")
-
-                with st.expander("Comparación de algoritmos"):
-                    st.json(metricas_cluster.get("metricas_por_algoritmo", []))
-
-            else:
-                if tipo_modelo == "Regresion_lineal":
-                    metricas_lineal = metricas_interfaz
-                    st.markdown("#### Resultados de Regresión Lineal")
-                    st.write(f"**Tipo de problema:** {metricas_lineal.get('tipo_problema', 'regresion')}")
-                    visualizaciones = metricas_lineal.get("visualizaciones", {})
-                    if visualizaciones.get("real_vs_prediccion"):
-                        st.image(visualizaciones["real_vs_prediccion"], caption="Real vs predicción",
-                                 use_column_width=True)
-                    else:
-                        st.info("Visualización real vs predicción no disponible.")
-
-                if es_redes_resultado:
-                    metricas_red = metricas_interfaz
-                    st.markdown("#### Resultados de Redes Neuronales")
-                    st.write(f"**Tipo de problema:** {metricas_red.get('tipo_problema')}")
-                    visualizaciones = metricas_red.get("visualizaciones", {})
-                    col_nn1, col_nn2 = st.columns(2)
-                    with col_nn1:
-                        if visualizaciones.get("perdida"):
-                            st.image(visualizaciones["perdida"], caption="Curva de pérdida")
-                        if visualizaciones.get("curva_roc"):
-                            st.image(visualizaciones["curva_roc"], caption="Curva ROC")
-                    with col_nn2:
-                        if visualizaciones.get("matriz_confusion"):
-                            st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusión")
-                        if visualizaciones.get("real_vs_prediccion"):
-                            st.image(visualizaciones["real_vs_prediccion"], caption="Real vs predicción")
-
-                if es_knn_resultado:
-                    metricas_knn = metricas_interfaz
-                    st.markdown("#### Resultados de KNN")
-                    st.write(f"**Tipo de problema:** {metricas_knn.get('tipo_problema')}")
-                    visualizaciones = metricas_knn.get("visualizaciones", {})
-                    col_knn1, col_knn2 = st.columns(2)
-                    with col_knn1:
-                        if visualizaciones.get("error_vs_k"):
-                            st.image(visualizaciones["error_vs_k"], caption="Error vs K")
-                        if visualizaciones.get("matriz_confusion"):
-                            st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusión")
-                    with col_knn2:
-                        if visualizaciones.get("curva_roc"):
-                            st.image(visualizaciones["curva_roc"], caption="Curva ROC")
-                        if visualizaciones.get("real_vs_prediccion"):
-                            st.image(visualizaciones["real_vs_prediccion"], caption="Predicción vs valores reales")
-
-                if es_arbol_resultado:
-                    metricas_arbol = metricas_interfaz
-                    st.markdown("#### Resultados de Árboles")
-                    st.write(f"**Modelo seleccionado:** {metricas_arbol.get('modelo_seleccionado')}")
-                    st.write(f"**Tipo de problema:** {metricas_arbol.get('tipo_problema')}")
-                    visualizaciones = metricas_arbol.get("visualizaciones", {})
-                    col_tree1, col_tree2 = st.columns(2)
-                    with col_tree1:
-                        if visualizaciones.get("arbol"):
-                            st.image(visualizaciones["arbol"], caption="Árbol")
-                        if visualizaciones.get("matriz_confusion"):
-                            st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusión")
-                    with col_tree2:
-                        if visualizaciones.get("feature_importance"):
-                            st.image(visualizaciones["feature_importance"], caption="Feature importance")
-                        if visualizaciones.get("real_vs_prediccion"):
-                            st.image(visualizaciones["real_vs_prediccion"], caption="Real vs predicción")
-
-                if es_logistica_resultado:
-                    metricas_log = metricas_interfaz
-                    st.markdown("#### Resultados de Regresión Logística")
-                    st.write(f"**Tipo de problema:** {metricas_log.get('tipo_problema')}")
-                    visualizaciones = metricas_log.get("visualizaciones", {})
-                    col_log1, col_log2 = st.columns(2)
-                    with col_log1:
-                        if visualizaciones.get("curva_roc"):
-                            st.image(visualizaciones["curva_roc"], caption="Curva ROC")
-                        if visualizaciones.get("matriz_confusion"):
-                            st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusión")
-                    with col_log2:
-                        if visualizaciones.get("coeficientes"):
-                            st.image(visualizaciones["coeficientes"], caption="Coeficientes")
-
-                if es_credit_resultado:
-                    metricas_credit = metricas_interfaz
-                    st.markdown("#### Resultados de Credit Scoring")
-                    st.write(f"**Tipo de problema:** {metricas_credit.get('tipo_problema')}")
-                    visualizaciones = metricas_credit.get("visualizaciones", {})
-                    col_credit1, col_credit2 = st.columns(2)
-                    with col_credit1:
-                        if visualizaciones.get("score_distribution"):
-                            st.image(visualizaciones["score_distribution"], caption="Distribución de score")
-                        if visualizaciones.get("curva_roc"):
-                            st.image(visualizaciones["curva_roc"], caption="Curva ROC")
-                        if visualizaciones.get("matriz_confusion"):
-                            st.image(visualizaciones["matriz_confusion"], caption="Matriz de confusión")
-                    with col_credit2:
-                        if visualizaciones.get("segmentos_riesgo"):
-                            st.image(visualizaciones["segmentos_riesgo"], caption="Segmentos de riesgo")
-                        if visualizaciones.get("coeficientes"):
-                            st.image(visualizaciones["coeficientes"], caption="Coeficientes")
-
-        with tab_pipe:
-            st.markdown("#### Resumen del Pipeline")
-            rp1, rp2 = st.columns(2)
-            with rp1:
-                st.markdown(f"**Columnas usadas:** {resumen_pipeline['columnas_usadas']}")
-                st.markdown(f"**Outliers corregidos:** {resumen_pipeline['outliers_corregidos']}")
-                if resumen_pipeline["tiempo_total"] != "N/D":
-                    st.markdown(f"**Tiempo total:** {resumen_pipeline['tiempo_total']} s")
-            with rp2:
-                st.markdown(f"**Nulos tratados:** {resumen_pipeline['nulos_tratados']}")
-                if columnas_eliminadas:
-                    st.markdown(f"**Columnas eliminadas ({len(columnas_eliminadas)}):**")
-                    st.code(", ".join(str(c) for c in columnas_eliminadas))
-            with st.expander("Reglas de preprocesamiento (JSON)"):
-                st.json(res.get("reglas", {}))
-
-        with tab_ins:
-            st.markdown("#### Interpretación del Agente")
-            if st.session_state.messages_resultados:
-                first_msg = st.session_state.messages_resultados[0]
-                st.markdown(first_msg["content"])
-            else:
-                st.info("El agente aún no ha analizado los resultados.")
-
+        return
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  APP BOOTSTRAP                                               ║

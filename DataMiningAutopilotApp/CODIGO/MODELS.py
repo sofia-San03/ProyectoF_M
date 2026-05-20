@@ -147,6 +147,7 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
     mejor_modelo = grid_search.best_estimator_
     score = mejor_modelo.score(X_train_sel, y_train)
     y_pred = mejor_modelo.predict(X_test_sel)
+    residuales = y_test - y_pred
 
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
@@ -185,6 +186,15 @@ def Regresion_lineal(X, y, test_size=0.3, cv_folds=5, model_filename='modelo_lin
         },
         "visualizaciones": {
             "real_vs_prediccion": real_vs_pred_path
+        },
+        "diagnostico": {
+            "y_test": np.asarray(y_test, dtype=float).tolist(),
+            "y_pred": np.asarray(y_pred, dtype=float).tolist(),
+            "residuales": np.asarray(residuales, dtype=float).tolist(),
+            "error_absoluto": np.abs(residuales).astype(float).tolist(),
+            "columnas_modelo": columnas_significativas,
+            "n_train": int(len(X_train_sel)),
+            "n_test": int(len(X_test_sel))
         },
         "validacion": {
             "test_size": test_size,
